@@ -38,13 +38,34 @@ async function render(tab) {
 }
 
 async function renderPending() {
-  const [txs, cats] = await Promise.all([api('/transactions?status=pending'), api('/categories')]);
+  const [txs, cats, accounts] = await Promise.all([
+    api('/transactions?status=pending'), api('/categories'), api('/accounts'),
+  ]);
   if (txs.length === 0) {
     content.innerHTML = '<p class="muted">تراکنش در انتظاری وجود ندارد.</p>';
     return;
   }
-  content.innerHTML = txs.map((t) => txCard(t, cats, true)).join('');
-  txs.forEach((t) => wireTxCard(t));
+  content.innerHTML = txs.map((t) => txCard(t, cats, true, accounts)).join('');
+  txs.forEach((t) => wireTxCard(t, cats, accounts));
+}
+
+const TRANSFER_CATEGORY_NAME = 'انتقال وجه بین حساب';
+
+function otherAccountFieldHtml(idSuffix, accounts, currentAccountId) {
+  const options = accounts
+    .filter((a) => a.id !== currentAccountId)
+    .map((a) => `<option value="${a.id}">${a.display_name}</option>`)
+    .join('');
+  return `<select id="other-account-${idSuffix}" hidden><option value="">حساب مقابل را انتخاب کنید...</option>${options}</select>`;
+}
+
+function wireTransferField(catSelectId, otherAccountSelectId, cats) {
+  const catSelect = document.getElementById(catSelectId);
+  const otherAccountSelect = document.getElementById(otherAccountSelectId);
+  catSelect.addEventListener('change', () => {
+    const selected = cats.find((c) => String(c.id) === catSelect.value);
+    otherAccountSelect.hidden = !(selected && selected.name === TRANSFER_CATEGORY_NAME);
+  });
 }
 
 async function renderTransactions() {
@@ -66,7 +87,7 @@ async function renderTransactions() {
   `).join('');
 }
 
-function txCard(t, cats, editable) {
+function txCard(t, cats, editable, accounts) {
   const options = cats
     .filter((c) => c.direction === t.direction)
     .map((c) => `<option value="${c.id}">${c.name}</option>`)
@@ -82,6 +103,7 @@ function txCard(t, cats, editable) {
       <div class="muted">موجودی بعد از تراکنش: ${t.balance_after_rial != null ? toman(t.balance_after_rial) + ' تومان' : '-'}</div>
       ${editable ? `
         <select id="cat-${t.id}"><option value="">انتخاب دسته‌بندی...</option>${options}</select>
+        ${otherAccountFieldHtml(t.id, accounts, t.account_id)}
         <input id="note-${t.id}" placeholder="توضیح (اختیاری)" />
         <button class="action" id="confirm-${t.id}">ثبت</button>
       ` : ''}
@@ -89,12 +111,18 @@ function txCard(t, cats, editable) {
   `;
 }
 
-function wireTxCard(t) {
+function wireTxCard(t, cats, accounts) {
   const btn = document.getElementById(`confirm-${t.id}`);
   if (!btn) return;
+  wireTransferField(`cat-${t.id}`, `other-account-${t.id}`, cats);
   btn.addEventListener('click', async () => {
     const category_id = document.getElementById(`cat-${t.id}`).value || null;
-    const note = document.getElementById(`note-${t.id}`).value || null;
+    let note = document.getElementById(`note-${t.id}`).value || null;
+    const otherAccountSelect = document.getElementById(`other-account-${t.id}`);
+    if (!otherAccountSelect.hidden && otherAccountSelect.value) {
+      const otherAccount = accounts.find((a) => String(a.id) === otherAccountSelect.value);
+      note = `حساب مقابل: ${otherAccount.display_name}${note ? ' — ' + note : ''}`;
+    }
     await api(`/transactions/${t.id}/confirm`, { method: 'POST', body: JSON.stringify({ category_id, note }) });
     document.getElementById(`tx-${t.id}`).remove();
   });
@@ -253,6 +281,7 @@ async function openManualModal() {
       </select>
       <input id="m-amount" type="number" placeholder="مبلغ (تومان)" />
       <select id="m-category">${renderCatOptions('expense')}</select>
+      ${otherAccountFieldHtml('m', accounts, null)}
       <input id="m-note" placeholder="توضیح (اختیاری)" />
       <button class="action" id="m-save">ثبت</button>
       <button class="action secondary" id="m-cancel">انصراف</button>
@@ -263,13 +292,19 @@ async function openManualModal() {
   document.getElementById('m-direction').addEventListener('change', (e) => {
     document.getElementById('m-category').innerHTML = renderCatOptions(e.target.value);
   });
+  wireTransferField('m-category', 'other-account-m', cats);
   document.getElementById('m-cancel').addEventListener('click', () => { manualModal.hidden = true; });
   document.getElementById('m-save').addEventListener('click', async () => {
     const account_id = document.getElementById('m-account').value;
     const direction = document.getElementById('m-direction').value;
     const amountToman = Number(document.getElementById('m-amount').value);
     const category_id = document.getElementById('m-category').value || null;
-    const note = document.getElementById('m-note').value || null;
+    let note = document.getElementById('m-note').value || null;
+    const otherAccountSelect = document.getElementById('other-account-m');
+    if (!otherAccountSelect.hidden && otherAccountSelect.value) {
+      const otherAccount = accounts.find((a) => String(a.id) === otherAccountSelect.value);
+      note = `حساب مقابل: ${otherAccount.display_name}${note ? ' — ' + note : ''}`;
+    }
     if (!account_id || !amountToman) return;
     await api('/transactions/manual', {
       method: 'POST',
