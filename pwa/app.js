@@ -167,23 +167,42 @@ function wireTransferField(catSelectId, otherAccountSelectId, cats) {
   });
 }
 
+const TX_PAGE_SIZE = 10;
+let txPage = 1;
+
 async function renderTransactions() {
   const txs = await api('/transactions');
   if (txs.length === 0) {
     content.innerHTML = '<p class="muted">هیچ تراکنشی ثبت نشده.</p>';
     return;
   }
-  content.innerHTML = txs.map((t) => `
-    <div class="card">
-      <div class="row">
-        <span class="${t.direction === 'income' ? 'amount-income' : 'amount-expense'}">
-          ${t.direction === 'income' ? '+' : '-'}${toman(t.amount_rial)} تومان
-        </span>
-        <span class="muted">${new Date(t.created_at).toLocaleString('fa-IR')}</span>
+  const totalPages = Math.max(1, Math.ceil(txs.length / TX_PAGE_SIZE));
+  txPage = Math.min(txPage, totalPages);
+  const start = (txPage - 1) * TX_PAGE_SIZE;
+  const pageItems = txs.slice(start, start + TX_PAGE_SIZE);
+
+  content.innerHTML = `
+    <div class="muted" style="margin-bottom:8px">${txs.length} تراکنش</div>
+    ${pageItems.map((t) => `
+      <div class="card">
+        <div class="row">
+          <span class="${t.direction === 'income' ? 'amount-income' : 'amount-expense'} font-num">
+            ${t.direction === 'income' ? '+' : '-'}${toman(t.amount_rial)} تومان
+          </span>
+          <span class="muted">${new Date(t.created_at).toLocaleString('fa-IR')}</span>
+        </div>
+        <div class="muted">${t.account_name} · ${t.category_name || 'بدون دسته'}${t.note ? ' · ' + t.note : ''}</div>
       </div>
-      <div class="muted">${t.account_name} · ${t.category_name || 'بدون دسته'}${t.note ? ' · ' + t.note : ''}</div>
+    `).join('')}
+    <div class="row" style="margin-top:12px">
+      <button class="action secondary" id="tx-prev" style="width:auto" ${txPage <= 1 ? 'disabled' : ''}>‹ قبلی</button>
+      <span class="muted font-num">صفحه ${txPage} از ${totalPages}</span>
+      <button class="action secondary" id="tx-next" style="width:auto" ${txPage >= totalPages ? 'disabled' : ''}>بعدی ›</button>
     </div>
-  `).join('');
+  `;
+
+  document.getElementById('tx-prev').addEventListener('click', () => { txPage--; renderTransactions(); });
+  document.getElementById('tx-next').addEventListener('click', () => { txPage++; renderTransactions(); });
 }
 
 function txCard(t, cats, editable, accounts) {

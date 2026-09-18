@@ -51,6 +51,8 @@
     --green: #34d399;
     --red: #f87171;
     --amber: #f59e0b;
+    --gold: #f59e0b;
+    --gold-dark: #b45309;
   }
   * { box-sizing: border-box; }
   body {
@@ -91,7 +93,10 @@
     background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px;
     padding: 10px; font-size: 0.9rem; width: 100%; margin-top: 8px; font-family: inherit;
   }
-  button.action { background: var(--blue); border: none; cursor: pointer; margin-top: 12px; font-weight: 700; }
+  button.action {
+    background: linear-gradient(135deg, var(--gold), var(--gold-dark)); color: #1c1203;
+    border: none; cursor: pointer; margin-top: 12px; font-weight: 700;
+  }
   button.secondary { background: var(--surface-2); border: 1px solid var(--border); }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   [hidden] { display: none !important; }
