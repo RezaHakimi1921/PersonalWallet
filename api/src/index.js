@@ -174,6 +174,31 @@ app.post('/transactions/manual', async (req, res) => {
   }
 });
 
+// Delete a transaction and reverse its effect on the account balance.
+app.delete('/transactions/:id', async (req, res) => {
+  const { id } = req.params;
+  const client = await pool.connect();
+  try {
+    const txRes = await client.query('SELECT * FROM transactions WHERE id = $1', [id]);
+    if (txRes.rows.length === 0) return res.status(404).json({ error: 'not found' });
+    const tx = txRes.rows[0];
+
+    const accountRes = await client.query('SELECT * FROM accounts WHERE id = $1', [tx.account_id]);
+    const account = accountRes.rows[0];
+    const revertedBalance = tx.direction === 'income'
+      ? Number(account.balance_rial) - Number(tx.amount_rial)
+      : Number(account.balance_rial) + Number(tx.amount_rial);
+    await client.query('UPDATE accounts SET balance_rial = $1 WHERE id = $2', [revertedBalance, tx.account_id]);
+    await client.query('DELETE FROM transactions WHERE id = $1', [id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  } finally {
+    client.release();
+  }
+});
+
 app.post('/transactions/:id/confirm', async (req, res) => {
   const { id } = req.params;
   const { category_id, note } = req.body || {};

@@ -71,16 +71,45 @@ async function render(tab) {
   }
 }
 
+const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#f97316', '#64748b'];
+
+function donutChartHtml(chartData) {
+  const total = chartData.reduce((s, d) => s + d.value, 0);
+  if (total === 0) return '<p class="muted">هزینه‌ای این ماه ثبت نشده.</p>';
+  let acc = 0;
+  const stops = chartData.map((d, i) => {
+    const from = (acc / total) * 360;
+    acc += d.value;
+    const to = (acc / total) * 360;
+    return `${CHART_COLORS[i % CHART_COLORS.length]} ${from}deg ${to}deg`;
+  }).join(', ');
+  const legend = chartData.map((d, i) => `
+    <div class="row" style="font-size:.75rem;margin-top:4px">
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${CHART_COLORS[i % CHART_COLORS.length]};margin-left:6px"></span>${d.name}</span>
+      <span class="muted font-num">${d.value.toLocaleString('en-US')} ت</span>
+    </div>
+  `).join('');
+  return `
+    <div class="row" style="align-items:center;gap:16px">
+      <div style="width:110px;height:110px;border-radius:50%;background:conic-gradient(${stops});flex:0 0 auto"></div>
+      <div style="flex:1">${legend}</div>
+    </div>
+  `;
+}
+
 async function renderOverview() {
-  const [accounts, pending, installments, transactions] = await Promise.all([
+  const [accounts, pending, installments, transactions, investments, categories] = await Promise.all([
     api('/accounts'), api('/transactions?status=pending'), api('/installments'), api('/transactions'),
+    api('/investments'), api('/categories'),
   ]);
 
   const totalCash = accounts.reduce((sum, a) => sum + Number(a.balance_rial), 0);
+  const totalInvestments = investments.reduce((sum, v) => sum + Number(v.current_value_rial), 0);
   const activeInstallments = installments.filter((i) => i.status === 'active');
   const remainingDebt = activeInstallments.reduce(
     (sum, i) => sum + i.installment_amount_rial * (i.total_count - i.paid_count), 0
   );
+  const netWorth = totalCash + totalInvestments - remainingDebt;
   const now = new Date();
   const thisMonthTx = transactions.filter((t) => {
     const d = new Date(t.created_at);
@@ -89,7 +118,34 @@ async function renderOverview() {
   const monthExpense = thisMonthTx.filter((t) => t.direction === 'expense').reduce((s, t) => s + Number(t.amount_rial), 0);
   const monthIncome = thisMonthTx.filter((t) => t.direction === 'income').reduce((s, t) => s + Number(t.amount_rial), 0);
 
-  let html = '';
+  const expenseByCategory = {};
+  thisMonthTx.filter((t) => t.direction === 'expense' && t.category_id).forEach((t) => {
+    const cat = categories.find((c) => c.id === t.category_id);
+    const name = cat ? cat.name : 'سایر';
+    expenseByCategory[name] = (expenseByCategory[name] || 0) + Math.round(Number(t.amount_rial) / 10);
+  });
+  const chartData = Object.entries(expenseByCategory).map(([name, value]) => ({ name, value: Number(value) }));
+
+  let html = `
+    <div class="card" style="text-align:center">
+      <div class="muted">دارایی خالص شما</div>
+      <div class="privacy-target font-num" style="font-size:1.6rem;font-weight:800;margin-top:6px">${toman(netWorth)} <span class="muted" style="font-size:.8rem">تومان</span></div>
+    </div>
+    <div class="metric-grid" style="grid-template-columns:1fr 1fr 1fr">
+      <div class="metric-card" style="background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.25)">
+        <div class="metric-label" style="font-size:.7rem">بدهی</div>
+        <div class="privacy-target font-num" style="color:var(--red);font-weight:700;margin-top:4px">${toman(remainingDebt)}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label" style="font-size:.7rem">سرمایه</div>
+        <div class="privacy-target font-num" style="font-weight:700;margin-top:4px">${toman(totalInvestments)}</div>
+      </div>
+      <div class="metric-card" style="background:rgba(52,211,153,.08);border-color:rgba(52,211,153,.25)">
+        <div class="metric-label" style="font-size:.7rem">نقدینگی</div>
+        <div class="privacy-target font-num" style="color:var(--green);font-weight:700;margin-top:4px">${toman(totalCash)}</div>
+      </div>
+    </div>
+  `;
   if (pending.length > 0) {
     html += `
       <div class="card" style="border-color:rgba(245,158,11,.4);background:rgba(120,53,15,.25)">
@@ -106,14 +162,6 @@ async function renderOverview() {
   html += `
     <div class="metric-grid">
       <div class="metric-card">
-        <div class="metric-label"><span>موجودی نقدی کل</span> 💰</div>
-        <div class="metric-value privacy-target" style="color:var(--green)">${toman(totalCash)} <span class="muted" style="font-size:.7rem">تومان</span></div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label"><span>مانده بدهی اقساط</span> 💳</div>
-        <div class="metric-value privacy-target" style="color:var(--red)">${toman(remainingDebt)} <span class="muted" style="font-size:.7rem">تومان</span></div>
-      </div>
-      <div class="metric-card">
         <div class="metric-label"><span>هزینه این ماه</span> ⬇️</div>
         <div class="metric-value privacy-target" style="color:var(--red)">${toman(monthExpense)} <span class="muted" style="font-size:.7rem">تومان</span></div>
       </div>
@@ -121,6 +169,10 @@ async function renderOverview() {
         <div class="metric-label"><span>درآمد این ماه</span> ⬆️</div>
         <div class="metric-value privacy-target" style="color:var(--green)">${toman(monthIncome)} <span class="muted" style="font-size:.7rem">تومان</span></div>
       </div>
+    </div>
+    <div class="card">
+      <strong>هزینه‌ها به تفکیک دسته (این ماه)</strong>
+      <div class="privacy-target" style="margin-top:10px">${donutChartHtml(chartData)}</div>
     </div>
   `;
 
@@ -223,7 +275,10 @@ function txCard(t, cats, editable, accounts) {
         <select id="cat-${t.id}"><option value="">انتخاب دسته‌بندی...</option>${options}</select>
         ${otherAccountFieldHtml(t.id, accounts, t.account_id)}
         <input id="note-${t.id}" placeholder="توضیح (اختیاری)" />
-        <button class="action" id="confirm-${t.id}">ثبت</button>
+        <div class="row" style="gap:8px">
+          <button class="action" id="confirm-${t.id}" style="flex:1">ثبت و قطعی</button>
+          <button class="action secondary" id="delete-${t.id}" style="width:auto;flex:0 0 auto">🗑</button>
+        </div>
       ` : ''}
     </div>
   `;
@@ -244,14 +299,30 @@ function wireTxCard(t, cats, accounts) {
     await api(`/transactions/${t.id}/confirm`, { method: 'POST', body: JSON.stringify({ category_id, note }) });
     document.getElementById(`tx-${t.id}`).remove();
   });
+  document.getElementById(`delete-${t.id}`).addEventListener('click', async () => {
+    if (!confirm('این تراکنش حذف شود؟ موجودی حساب به حالت قبل برمی‌گردد.')) return;
+    await api(`/transactions/${t.id}`, { method: 'DELETE' });
+    document.getElementById(`tx-${t.id}`).remove();
+    updatePendingBadge();
+  });
 }
 
 async function renderAccounts() {
   const accounts = await api('/accounts');
-  content.innerHTML = accounts.map((a) => `
+  const total = accounts.reduce((s, a) => s + Number(a.balance_rial), 0);
+  content.innerHTML = `
     <div class="card row">
-      <span>${a.display_name}</span>
-      <strong class="privacy-target font-num">${toman(a.balance_rial)} تومان</strong>
+      <span class="muted">مجموع موجودی</span>
+      <strong class="privacy-target font-num" style="color:var(--green)">${toman(total)} تومان</strong>
+    </div>
+  ` + accounts.map((a) => `
+    <div class="bank-card" style="margin-bottom:10px">
+      <div class="row"><span>${a.display_name}</span><span class="muted">🏦</span></div>
+      <div class="num font-num">•••• •••• ••••</div>
+      <div class="row" style="margin-top:12px">
+        <span class="muted" style="font-size:.75rem">موجودی</span>
+        <strong class="privacy-target font-num">${toman(a.balance_rial)} تومان</strong>
+      </div>
     </div>
   `).join('');
 }
@@ -268,13 +339,30 @@ async function renderInstallments() {
       <input id="i-day" type="number" placeholder="روز موعد در ماه (شمسی)" min="1" max="31" />
       <button class="action" id="i-add">افزودن</button>
     </div>
-  ` + (items.length === 0 ? '<p class="muted">قسطی ثبت نشده.</p>' : items.map((i) => `
+  ` + (items.length === 0 ? '<p class="muted">قسطی ثبت نشده.</p>' : items.map((i) => {
+    const percent = Math.round((i.paid_count / i.total_count) * 100);
+    const remaining = i.installment_amount_rial * (i.total_count - i.paid_count);
+    return `
     <div class="card">
-      <div class="row"><strong>${i.title}</strong><span class="muted">${i.type === 'loan' ? 'وام' : 'قسط'}</span></div>
-      <div class="muted">${toman(i.installment_amount_rial)} تومان · پرداخت‌شده ${i.paid_count} از ${i.total_count} · روز موعد: ${i.due_day_of_month}</div>
-      ${i.status === 'active' ? `<button class="action secondary" data-pay="${i.id}">ثبت پرداخت دستی</button>` : '<div class="muted">تکمیل‌شده</div>'}
+      <div class="row">
+        <strong>${i.title}</strong>
+        <span class="badge ${i.status}">${i.status === 'completed' ? 'تکمیل‌شده' : (i.type === 'loan' ? 'وام فعال' : 'قسط فعال')}</span>
+      </div>
+      <div class="progress-track"><div class="progress-fill" style="width:${percent}%"></div></div>
+      <div class="row muted" style="margin-top:6px;font-size:.75rem">
+        <span>قسط ${i.paid_count} از ${i.total_count} · روز موعد: ${i.due_day_of_month}</span>
+        <span class="font-num">${toman(i.installment_amount_rial)} تومان/ماه</span>
+      </div>
+      ${i.status === 'active' ? `
+        <div class="row" style="margin-top:8px">
+          <span class="muted" style="font-size:.75rem">مانده بدهی</span>
+          <strong class="font-num" style="color:var(--red)">${toman(remaining)} تومان</strong>
+        </div>
+        <button class="action secondary" data-pay="${i.id}">ثبت پرداخت دستی</button>
+      ` : ''}
     </div>
-  `).join(''));
+  `;
+  }).join(''));
 
   document.getElementById('i-add').addEventListener('click', async () => {
     const title = document.getElementById('i-title').value;
@@ -304,23 +392,45 @@ async function renderInstallments() {
 
 async function renderInvestments() {
   const items = await api('/investments');
+  const totalInvested = items.reduce((s, v) => s + Number(v.invested_amount_rial), 0);
+  const totalCurrent = items.reduce((s, v) => s + Number(v.current_value_rial), 0);
+  const totalGain = totalCurrent - totalInvested;
+
   content.innerHTML = `
+    <div class="metric-grid">
+      <div class="metric-card">
+        <div class="metric-label">سود/زیان کل</div>
+        <div class="metric-value privacy-target font-num" style="color:${totalGain >= 0 ? 'var(--green)' : 'var(--red)'}">${totalGain >= 0 ? '+' : ''}${toman(totalGain)}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">ارزش فعلی</div>
+        <div class="metric-value privacy-target font-num">${toman(totalCurrent)}</div>
+      </div>
+    </div>
     <div class="card">
       <strong>افزودن سرمایه‌گذاری</strong>
       <input id="v-title" placeholder="عنوان (مثلا: طلا)" />
       <input id="v-amount" type="number" placeholder="مبلغ سرمایه‌گذاری‌شده (تومان)" />
       <button class="action" id="v-add">افزودن</button>
     </div>
-  ` + (items.length === 0 ? '<p class="muted">سرمایه‌گذاری ثبت نشده.</p>' : items.map((v) => `
+  ` + (items.length === 0 ? '<p class="muted">سرمایه‌گذاری ثبت نشده.</p>' : items.map((v) => {
+    const gainPercent = v.invested_amount_rial > 0
+      ? Math.round(((v.current_value_rial - v.invested_amount_rial) / v.invested_amount_rial) * 100)
+      : 0;
+    return `
     <div class="card">
-      <strong>${v.title}</strong>
+      <div class="row">
+        <strong>${v.title}</strong>
+        <span class="badge ${gainPercent >= 0 ? 'gain' : 'loss'}">${gainPercent >= 0 ? '+' : ''}${gainPercent}%</span>
+      </div>
       <div class="muted">مبلغ اولیه: ${toman(v.invested_amount_rial)} تومان</div>
       <div class="grid2">
         <input id="v-cur-${v.id}" type="number" placeholder="ارزش فعلی (تومان)" value="${toman(v.current_value_rial)}" />
         <button class="action secondary" data-update="${v.id}">به‌روزرسانی</button>
       </div>
     </div>
-  `).join(''));
+  `;
+  }).join(''));
 
   document.getElementById('v-add').addEventListener('click', async () => {
     const title = document.getElementById('v-title').value;
@@ -345,6 +455,11 @@ async function renderInvestments() {
 
 async function renderCategories() {
   const cats = await api('/categories');
+  const pill = (c) => `
+    <button class="cat-pill ${c.direction}" data-edit="${c.id}" data-name="${c.name}">
+      ✎ ${c.name}
+    </button>
+  `;
   content.innerHTML = `
     <div class="card">
       <strong>افزودن دسته‌بندی جدید</strong>
@@ -352,12 +467,15 @@ async function renderCategories() {
       <select id="c-dir"><option value="expense">هزینه (کسر از حساب)</option><option value="income">درآمد (واریز)</option></select>
       <button class="action" id="c-add">افزودن</button>
     </div>
-  ` + cats.map((c) => `
-    <div class="card row">
-      <span>${c.name} <span class="muted">(${c.direction === 'income' ? 'درآمد' : 'هزینه'})</span></span>
-      <button class="action secondary" style="width:auto" data-edit="${c.id}" data-name="${c.name}">ویرایش نام</button>
+    <div class="card">
+      <strong style="color:var(--red)">دسته‌های هزینه</strong>
+      <div class="cat-pill-grid">${cats.filter((c) => c.direction === 'expense').map(pill).join('')}</div>
     </div>
-  `).join('');
+    <div class="card">
+      <strong style="color:var(--green)">دسته‌های درآمد</strong>
+      <div class="cat-pill-grid">${cats.filter((c) => c.direction === 'income').map(pill).join('')}</div>
+    </div>
+  `;
 
   document.getElementById('c-add').addEventListener('click', async () => {
     const name = document.getElementById('c-name').value;
@@ -436,6 +554,48 @@ async function openManualModal() {
 
 fab.addEventListener('click', openManualModal);
 document.getElementById('nav-fab').addEventListener('click', openManualModal);
+
+// SMS simulator: test the bank-SMS webhook/parser without needing a real text message
+const smsModal = document.getElementById('sms-modal');
+const SAMPLE_SMS = {
+  resalat: '10.8124258.1\n-50,000\n06/28_12:00\nمانده: 259,153,041',
+  blu: 'بلو\nبرداشت پول\nرضا عزیز، 50,000 ریال از حساب شما پرید.\nموجودی: 3,809,212 ریال\n۱۲:۰۰\n۱۴۰۵.۰۶.۲۸',
+  pasargad: '239.8000.15190614.1\n-50,000\n06/28_12:00\nمانده: 6,276,366',
+};
+
+function openSmsModal() {
+  smsModal.innerHTML = `
+    <div class="card">
+      <strong>شبیه‌ساز پیامک بانکی</strong>
+      <div class="muted" style="margin-top:4px">برای تست پارسر و نوتیف، بدون نیاز به پیامک واقعی</div>
+      <select id="s-bank">
+        <option value="resalat">بانک رسالت</option>
+        <option value="blu">بلو</option>
+        <option value="pasargad">بانک پاسارگاد</option>
+      </select>
+      <textarea id="s-text" class="sms-text"></textarea>
+      <button class="action" id="s-send">ارسال به وب‌هوک</button>
+      <button class="action secondary" id="s-cancel">انصراف</button>
+    </div>
+  `;
+  smsModal.hidden = false;
+  const bankSelect = document.getElementById('s-bank');
+  const textArea = document.getElementById('s-text');
+  const fillSample = () => { textArea.value = SAMPLE_SMS[bankSelect.value]; };
+  fillSample();
+  bankSelect.addEventListener('change', fillSample);
+  document.getElementById('s-cancel').addEventListener('click', () => { smsModal.hidden = true; });
+  document.getElementById('s-send').addEventListener('click', async () => {
+    await api('/webhook/sms', {
+      method: 'POST',
+      body: JSON.stringify({ bank: bankSelect.value, text: textArea.value }),
+    });
+    smsModal.hidden = true;
+    const activeTab = [...tabButtons].find((b) => b.classList.contains('active'))?.dataset.tab;
+    if (activeTab) render(activeTab);
+  });
+}
+document.getElementById('btn-sms-sim').addEventListener('click', openSmsModal);
 
 // restore privacy mode preference
 applyPrivacyMode(localStorage.getItem(PRIVACY_KEY) === '1');

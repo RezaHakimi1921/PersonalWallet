@@ -103,6 +103,29 @@
 
   .privacy-blur { filter: blur(6px); user-select: none; }
 
+  .cat-pill-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .cat-pill {
+    border-radius: 12px; padding: 10px 12px; font-size: 0.8rem; font-weight: 600; font-family: inherit;
+    text-align: right; cursor: pointer; border: 1px solid;
+  }
+  .cat-pill.expense { background: rgba(248,113,113,.1); border-color: rgba(248,113,113,.3); color: #fca5a5; }
+  .cat-pill.income { background: rgba(52,211,153,.1); border-color: rgba(52,211,153,.3); color: #6ee7b7; }
+
+  .bank-card {
+    border-radius: 16px; padding: 16px; color: white; position: relative; overflow: hidden;
+    background: linear-gradient(135deg, #1e293b, #0f172a); border: 1px solid var(--border);
+  }
+  .bank-card .num { letter-spacing: 2px; font-size: 0.85rem; color: #cbd5e1; margin-top: 18px; }
+
+  .badge { font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+  .badge.active { background: rgba(59,130,246,.15); color: #93c5fd; }
+  .badge.completed { background: rgba(52,211,153,.15); color: #6ee7b7; }
+  .badge.gain { background: rgba(52,211,153,.15); color: #6ee7b7; }
+  .badge.loss { background: rgba(248,113,113,.15); color: #fca5a5; }
+
+  .progress-track { background: var(--surface-2); border-radius: 999px; height: 8px; margin-top: 8px; overflow: hidden; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, var(--gold-dark), var(--gold)); }
+
   #btn-privacy {
     background: var(--surface-2); border: 1px solid var(--border-soft); color: var(--muted);
     border-radius: 10px; padding: 8px 12px; font-size: 0.75rem; font-family: inherit; cursor: pointer;
@@ -150,17 +173,24 @@
   .more-item.active { background: var(--blue-dim); border-color: rgba(59,130,246,.4); color: #93c5fd; }
 
   #fab { display: none; }
-  #manual-modal {
+  #manual-modal, #sms-modal {
     position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 60;
     display: flex; align-items: center; justify-content: center; padding: 16px;
   }
-  #manual-modal .card { width: 100%; max-width: 360px; margin: 0; }
+  #manual-modal .card, #sms-modal .card { width: 100%; max-width: 360px; margin: 0; }
+  textarea.sms-text {
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px; font-size: 0.85rem; width: 100%; margin-top: 8px; font-family: inherit; min-height: 90px; direction: ltr; text-align: right;
+  }
 </style>
 </head>
 <body>
-  <div class="row" style="margin-bottom:14px">
-    <h1>کیف پول شخصی</h1>
-    <button id="btn-privacy">👁 محو کردن ارقام</button>
+  <div class="row" style="margin-bottom:14px;flex-wrap:wrap;gap:8px">
+    <h1 style="margin:0">کیف پول شخصی</h1>
+    <div class="row" style="gap:8px;width:auto">
+      <button id="btn-sms-sim" style="background:linear-gradient(135deg,var(--gold),var(--gold-dark));color:#1c1203;border:none;border-radius:10px;padding:8px 12px;font-size:.75rem;font-weight:700;font-family:inherit;cursor:pointer">🧪 تست پیامک</button>
+      <button id="btn-privacy">👁 محو کردن ارقام</button>
+    </div>
   </div>
 
   <nav class="top-nav">
@@ -199,6 +229,7 @@
 
   <button id="fab" title="ثبت دستی تراکنش">+</button>
   <div id="manual-modal" hidden></div>
+  <div id="sms-modal" hidden></div>
 
   <script src="/app.js"></script>
 </body>
