@@ -1,16 +1,12 @@
 import React from 'react';
 import { 
-  Wallet, 
-  TrendingUp, 
-  TrendingDown, 
-  AlertCircle, 
   PiggyBank, 
   CreditCard, 
   ArrowUpRight, 
   ArrowDownLeft, 
   Clock, 
-  CheckCircle2,
-  Calendar
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { OverviewSummary, Account, Transaction, Installment, Category } from '../types';
 import { formatRialAsToman, toPersianDigits, getBankMeta, formatShamsi } from '../utils/formatters';
@@ -25,6 +21,8 @@ interface OverviewViewProps {
   categories: Category[];
   onNavigateTab: (tab: any) => void;
   onOpenSmsSimulator: () => void;
+  isPrivacyMode?: boolean;
+  onTogglePrivacyMode?: () => void;
 }
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#f97316', '#64748b'];
@@ -38,6 +36,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   categories,
   onNavigateTab,
   onOpenSmsSimulator,
+  isPrivacyMode = false,
+  onTogglePrivacyMode,
 }) => {
   if (!overview) return null;
 
@@ -61,6 +61,39 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Top Header with Title and Privacy Toggle */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4">
+        <div>
+          <h2 className="text-sm sm:text-base font-bold text-slate-100">نمای کلی و داشبورد مالی</h2>
+          <p className="text-xs text-slate-400 mt-0.5">وضعیت موجودی نقد حساب‌های بانکی و مانده بدهی وام‌ها</p>
+        </div>
+
+        {onTogglePrivacyMode && (
+          <button
+            id="btn-toggle-privacy-overview"
+            onClick={onTogglePrivacyMode}
+            className={`flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-medium border transition-all active:scale-95 shrink-0 ${
+              isPrivacyMode
+                ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500/25 shadow-sm'
+                : 'bg-slate-800/90 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white'
+            }`}
+            title={isPrivacyMode ? 'آشکارسازی اطلاعات حساب و موجودی‌ها' : 'محو کردن موجودی و اطلاعات حساب (حفظ حریم خصوصی)'}
+          >
+            {isPrivacyMode ? (
+              <>
+                <EyeOff className="w-4 h-4 text-amber-400" />
+                <span>حالت محرمانه (فعال)</span>
+              </>
+            ) : (
+              <>
+                <Eye className="w-4 h-4 text-slate-400" />
+                <span>محو کردن ارقام حساب</span>
+              </>
+            )}
+          </button>
+        )}
+      </div>
+
       {/* Alert banner if there are pending transactions */}
       {pendingTransactions.length > 0 && (
         <div className="bg-amber-950/40 border border-amber-800/60 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg shadow-amber-950/20">
@@ -87,27 +120,9 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
         </div>
       )}
 
-      {/* Primary 4 Metric Cards */}
+      {/* Primary 4 Metric Cards (Focused purely on Cash Balance, Loan Debt, and Monthly Flows) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        {/* 1. Net Worth */}
-        <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 sm:p-5 relative overflow-hidden group hover:border-slate-700 transition-all">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-400">ارزش کل دارایی خالص</span>
-            <div className="w-8 h-8 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center">
-              <Wallet className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-2.5 sm:mt-3">
-            <div className="text-xl sm:text-2xl font-black text-slate-100 font-num tracking-tight break-words">
-              {formatRialAsToman(overview.netWorthRial)} <span className="text-xs font-normal text-slate-400">تومان</span>
-            </div>
-            <p className="text-[11px] text-slate-400 mt-1">
-              موجودی بانک‌ها + سرمایه‌گذاری‌ها - مانده اقساط
-            </p>
-          </div>
-        </div>
-
-        {/* 2. Total Liquid Cash in Banks */}
+        {/* 1. Total Liquid Cash in Banks */}
         <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 sm:p-5 relative overflow-hidden group hover:border-slate-700 transition-all">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-400">موجودی نقدی در حساب‌ها</span>
@@ -116,37 +131,16 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
             </div>
           </div>
           <div className="mt-2.5 sm:mt-3">
-            <div className="text-xl sm:text-2xl font-black text-emerald-400 font-num tracking-tight break-words">
-              {formatRialAsToman(overview.totalBalanceRial)} <span className="text-xs font-normal text-slate-400">تومان</span>
+            <div className={`text-xl sm:text-2xl font-black text-emerald-400 font-num tracking-tight break-words ${isPrivacyMode ? 'privacy-blur select-none' : ''}`}>
+              {isPrivacyMode ? '••••••••' : formatRialAsToman(overview.totalBalanceRial)} <span className="text-xs font-normal text-slate-400">تومان</span>
             </div>
             <p className="text-[11px] text-slate-400 mt-1">
-              مجموع {toPersianDigits(accounts.length)} حساب بانکی فعال
+              مجموع موجودی {toPersianDigits(accounts.length)} حساب بانکی فعال
             </p>
           </div>
         </div>
 
-        {/* 3. Investments Market Value */}
-        <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 sm:p-5 relative overflow-hidden group hover:border-slate-700 transition-all">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-400">ارزش روز سرمایه‌گذاری‌ها</span>
-            <div className="w-8 h-8 rounded-xl bg-purple-500/10 text-purple-400 flex items-center justify-center">
-              <TrendingUp className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-2.5 sm:mt-3">
-            <div className="text-xl sm:text-2xl font-black text-purple-400 font-num tracking-tight break-words">
-              {formatRialAsToman(overview.totalInvestmentsRial)} <span className="text-xs font-normal text-slate-400">تومان</span>
-            </div>
-            <div className="flex items-center gap-1.5 mt-1 font-num text-[11px] flex-wrap">
-              <span className={overview.investmentProfitRial >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
-                {overview.investmentProfitRial >= 0 ? '+' : ''}
-                {formatRialAsToman(overview.investmentProfitRial)} تومان سود/زیان
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* 4. Total Loan Debt Remaining */}
+        {/* 2. Total Loan Debt Remaining */}
         <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 sm:p-5 relative overflow-hidden group hover:border-slate-700 transition-all">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-400">مانده کل بدهی وام‌ها</span>
@@ -155,11 +149,47 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
             </div>
           </div>
           <div className="mt-2.5 sm:mt-3">
-            <div className="text-xl sm:text-2xl font-black text-rose-400 font-num tracking-tight break-words">
-              {formatRialAsToman(overview.totalLoanRemainingRial)} <span className="text-xs font-normal text-slate-400">تومان</span>
+            <div className={`text-xl sm:text-2xl font-black text-rose-400 font-num tracking-tight break-words ${isPrivacyMode ? 'privacy-blur select-none' : ''}`}>
+              {isPrivacyMode ? '••••••••' : formatRialAsToman(overview.totalLoanRemainingRial)} <span className="text-xs font-normal text-slate-400">تومان</span>
             </div>
             <p className="text-[11px] text-slate-400 mt-1">
-              مجموع اقساط پرداخت‌نشده فعال
+              مجموع اقساط پرداخت‌نشده تسهیلات
+            </p>
+          </div>
+        </div>
+
+        {/* 3. Monthly Income Inflows */}
+        <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 sm:p-5 relative overflow-hidden group hover:border-slate-700 transition-all">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-slate-400">درآمد و واریزی‌های ماه</span>
+            <div className="w-8 h-8 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center">
+              <ArrowDownLeft className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-2.5 sm:mt-3">
+            <div className={`text-xl sm:text-2xl font-black text-blue-400 font-num tracking-tight break-words ${isPrivacyMode ? 'privacy-blur select-none' : ''}`}>
+              {isPrivacyMode ? '••••••••' : `+${formatRialAsToman(overview.monthlyIncomeRial)}`} <span className="text-xs font-normal text-slate-400">تومان</span>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-1">
+              واریزی‌های تایید شده ۳۰ روز گذشته
+            </p>
+          </div>
+        </div>
+
+        {/* 4. Monthly Expense Outflows */}
+        <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 sm:p-5 relative overflow-hidden group hover:border-slate-700 transition-all">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-slate-400">مخارج و هزینه‌های ماه</span>
+            <div className="w-8 h-8 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center">
+              <ArrowUpRight className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-2.5 sm:mt-3">
+            <div className={`text-xl sm:text-2xl font-black text-amber-400 font-num tracking-tight break-words ${isPrivacyMode ? 'privacy-blur select-none' : ''}`}>
+              {isPrivacyMode ? '••••••••' : `-${formatRialAsToman(overview.monthlyExpenseRial)}`} <span className="text-xs font-normal text-slate-400">تومان</span>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-1">
+              برداشت و هزینه‌های ۳۰ روز گذشته
             </p>
           </div>
         </div>
@@ -196,8 +226,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                     </span>
                   </div>
                   <div className="mt-4">
-                    <div className="text-lg font-bold text-slate-100 font-num">
-                      {formatRialAsToman(acc.balance_rial)}
+                    <div className={`text-lg font-bold text-slate-100 font-num ${isPrivacyMode ? 'privacy-blur select-none' : ''}`}>
+                      {isPrivacyMode ? '••••••••' : formatRialAsToman(acc.balance_rial)}
                     </div>
                     <div className="text-[11px] text-slate-500 font-num">
                       تومان
@@ -205,7 +235,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                   </div>
                   {acc.card_number && (
                     <div className="mt-2 pt-2 border-t border-slate-800/50 text-[10px] text-slate-500 font-mono tracking-wider text-left" dir="ltr">
-                      {acc.card_number}
+                      {isPrivacyMode ? '•••• •••• •••• ••••' : acc.card_number}
                     </div>
                   )}
                 </div>
@@ -229,8 +259,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                   </div>
                   <div>
                     <span className="text-xs text-slate-400 block">واریز و درآمد</span>
-                    <span className="text-sm font-bold text-emerald-400 font-num">
-                      +{formatRialAsToman(overview.monthlyIncomeRial)} تومان
+                    <span className={`text-sm font-bold text-emerald-400 font-num ${isPrivacyMode ? 'privacy-blur select-none' : ''}`}>
+                      {isPrivacyMode ? '•••••••• تومان' : `+${formatRialAsToman(overview.monthlyIncomeRial)} تومان`}
                     </span>
                   </div>
                 </div>
@@ -244,8 +274,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                   </div>
                   <div>
                     <span className="text-xs text-slate-400 block">برداشت و مخارج</span>
-                    <span className="text-sm font-bold text-rose-400 font-num">
-                      -{formatRialAsToman(overview.monthlyExpenseRial)} تومان
+                    <span className={`text-sm font-bold text-rose-400 font-num ${isPrivacyMode ? 'privacy-blur select-none' : ''}`}>
+                      {isPrivacyMode ? '•••••••• تومان' : `-${formatRialAsToman(overview.monthlyExpenseRial)} تومان`}
                     </span>
                   </div>
                 </div>
@@ -256,11 +286,13 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           <div className="mt-4 pt-3 border-t border-slate-800 text-xs text-slate-400 flex items-center justify-between">
             <span>تراز این دوره:</span>
             <span
-              className={`font-bold font-num ${
+              className={`font-bold font-num ${isPrivacyMode ? 'privacy-blur select-none' : ''} ${
                 overview.monthlyIncomeRial >= overview.monthlyExpenseRial ? 'text-emerald-400' : 'text-rose-400'
               }`}
             >
-              {formatRialAsToman(overview.monthlyIncomeRial - overview.monthlyExpenseRial)} تومان
+              {isPrivacyMode
+                ? '••••••••'
+                : `${formatRialAsToman(overview.monthlyIncomeRial - overview.monthlyExpenseRial)} تومان`}
             </span>
           </div>
         </div>

@@ -39,6 +39,27 @@ export default function App() {
   const [isSmsSimOpen, setIsSmsSimOpen] = useState<boolean>(false);
   const [isTransferOpen, setIsTransferOpen] = useState<boolean>(false);
 
+  // Privacy Mode State (Masking/Blurring account numbers and balances)
+  const [isPrivacyMode, setIsPrivacyMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('wallet_privacy_mode') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const togglePrivacyMode = () => {
+    setIsPrivacyMode((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('wallet_privacy_mode', String(next));
+      } catch (err) {
+        console.error(err);
+      }
+      return next;
+    });
+  };
+
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
@@ -318,6 +339,8 @@ export default function App() {
             categories={categories}
             onNavigateTab={setActiveTab}
             onOpenSmsSimulator={() => setIsSmsSimOpen(true)}
+            isPrivacyMode={isPrivacyMode}
+            onTogglePrivacyMode={togglePrivacyMode}
           />
         )}
 
@@ -349,6 +372,8 @@ export default function App() {
             onUpdateAccount={handleUpdateAccount}
             onAddAccount={handleAddAccount}
             onOpenTransfer={() => setIsTransferOpen(true)}
+            isPrivacyMode={isPrivacyMode}
+            onTogglePrivacyMode={togglePrivacyMode}
           />
         )}
 

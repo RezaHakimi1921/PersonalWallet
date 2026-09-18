@@ -8,7 +8,9 @@ import {
   Check, 
   X, 
   Wallet,
-  Coins
+  Coins,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { Account } from '../types';
 import { formatRialAsToman, toPersianDigits, getBankMeta } from '../utils/formatters';
@@ -18,6 +20,8 @@ interface AccountsViewProps {
   onUpdateAccount: (id: number, updates: Partial<Account>) => Promise<void>;
   onAddAccount: (newAcc: Partial<Account>) => Promise<void>;
   onOpenTransfer: () => void;
+  isPrivacyMode?: boolean;
+  onTogglePrivacyMode?: () => void;
 }
 
 export const AccountsView: React.FC<AccountsViewProps> = ({
@@ -25,6 +29,8 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   onUpdateAccount,
   onAddAccount,
   onOpenTransfer,
+  isPrivacyMode = false,
+  onTogglePrivacyMode,
 }) => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editBalanceToman, setEditBalanceToman] = useState('');
@@ -82,11 +88,30 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
             </span>
           </h2>
           <p className="text-xs text-slate-400 mt-1">
-            مجموع موجودی نقد: <strong className="text-emerald-400 font-num">{formatRialAsToman(totalBalance)} تومان</strong>
+            مجموع موجودی نقد:{' '}
+            <strong className={`text-emerald-400 font-num ${isPrivacyMode ? 'privacy-blur select-none' : ''}`}>
+              {isPrivacyMode ? '••••••••' : formatRialAsToman(totalBalance)} تومان
+            </strong>
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 w-full sm:w-auto">
+        <div className="flex items-center gap-2.5 w-full sm:w-auto flex-wrap">
+          {onTogglePrivacyMode && (
+            <button
+              id="btn-toggle-privacy-accounts"
+              onClick={onTogglePrivacyMode}
+              className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold border transition-all active:scale-95 ${
+                isPrivacyMode
+                  ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500/25'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+              }`}
+              title={isPrivacyMode ? 'آشکارسازی اطلاعات حساب' : 'محو کردن موجودی‌ها (حالت محرمانه)'}
+            >
+              {isPrivacyMode ? <EyeOff className="w-4 h-4 text-amber-400" /> : <Eye className="w-4 h-4 text-slate-400" />}
+              <span>{isPrivacyMode ? 'محرمانه (فعال)' : 'محو کردن'}</span>
+            </button>
+          )}
+
           <button
             id="btn-internal-transfer"
             onClick={onOpenTransfer}
@@ -141,7 +166,9 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
               {/* Card Middle: Card number */}
               <div className="my-3">
                 <div className="text-xs opacity-70 tracking-wider font-mono text-left" dir="ltr">
-                  {acc.card_number || '•••• •••• •••• ' + toPersianDigits(acc.id.toString().slice(-4))}
+                  {isPrivacyMode
+                    ? '•••• •••• •••• ••••'
+                    : (acc.card_number || '•••• •••• •••• ' + toPersianDigits(acc.id.toString().slice(-4)))}
                 </div>
               </div>
 
@@ -173,8 +200,8 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                       </button>
                     </div>
                   ) : (
-                    <div className="text-lg font-black font-num tracking-tight">
-                      {formatRialAsToman(acc.balance_rial)} <span className="text-xs font-normal opacity-80">تومان</span>
+                    <div className={`text-lg font-black font-num tracking-tight ${isPrivacyMode ? 'privacy-blur select-none' : ''}`}>
+                      {isPrivacyMode ? '••••••••' : formatRialAsToman(acc.balance_rial)} <span className="text-xs font-normal opacity-80">تومان</span>
                     </div>
                   )}
                 </div>
