@@ -80,7 +80,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           <button
             id="btn-goto-pending"
             onClick={() => onNavigateTab('pending')}
-            className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold rounded-xl transition-all shadow-sm shrink-0"
+            className="w-full sm:w-auto text-center px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold rounded-xl transition-all shadow-sm shrink-0 min-h-[40px] flex items-center justify-center"
           >
             مشاهده و تایید تراکنش‌ها
           </button>
@@ -88,17 +88,17 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
       )}
 
       {/* Primary 4 Metric Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {/* 1. Net Worth */}
-        <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-5 relative overflow-hidden group hover:border-slate-700 transition-all">
+        <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 sm:p-5 relative overflow-hidden group hover:border-slate-700 transition-all">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-400">ارزش کل دارایی خالص</span>
             <div className="w-8 h-8 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center">
               <Wallet className="w-4 h-4" />
             </div>
           </div>
-          <div className="mt-3">
-            <div className="text-2xl font-black text-slate-100 font-num tracking-tight">
+          <div className="mt-2.5 sm:mt-3">
+            <div className="text-xl sm:text-2xl font-black text-slate-100 font-num tracking-tight break-words">
               {formatRialAsToman(overview.netWorthRial)} <span className="text-xs font-normal text-slate-400">تومان</span>
             </div>
             <p className="text-[11px] text-slate-400 mt-1">
@@ -108,15 +108,15 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
         </div>
 
         {/* 2. Total Liquid Cash in Banks */}
-        <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-5 relative overflow-hidden group hover:border-slate-700 transition-all">
+        <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 sm:p-5 relative overflow-hidden group hover:border-slate-700 transition-all">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-400">موجودی نقدی در حساب‌ها</span>
             <div className="w-8 h-8 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
               <PiggyBank className="w-4 h-4" />
             </div>
           </div>
-          <div className="mt-3">
-            <div className="text-2xl font-black text-emerald-400 font-num tracking-tight">
+          <div className="mt-2.5 sm:mt-3">
+            <div className="text-xl sm:text-2xl font-black text-emerald-400 font-num tracking-tight break-words">
               {formatRialAsToman(overview.totalBalanceRial)} <span className="text-xs font-normal text-slate-400">تومان</span>
             </div>
             <p className="text-[11px] text-slate-400 mt-1">
@@ -126,18 +126,18 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
         </div>
 
         {/* 3. Investments Market Value */}
-        <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-5 relative overflow-hidden group hover:border-slate-700 transition-all">
+        <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 sm:p-5 relative overflow-hidden group hover:border-slate-700 transition-all">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-400">ارزش روز سرمایه‌گذاری‌ها</span>
             <div className="w-8 h-8 rounded-xl bg-purple-500/10 text-purple-400 flex items-center justify-center">
               <TrendingUp className="w-4 h-4" />
             </div>
           </div>
-          <div className="mt-3">
-            <div className="text-2xl font-black text-purple-400 font-num tracking-tight">
+          <div className="mt-2.5 sm:mt-3">
+            <div className="text-xl sm:text-2xl font-black text-purple-400 font-num tracking-tight break-words">
               {formatRialAsToman(overview.totalInvestmentsRial)} <span className="text-xs font-normal text-slate-400">تومان</span>
             </div>
-            <div className="flex items-center gap-1.5 mt-1 font-num text-[11px]">
+            <div className="flex items-center gap-1.5 mt-1 font-num text-[11px] flex-wrap">
               <span className={overview.investmentProfitRial >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
                 {overview.investmentProfitRial >= 0 ? '+' : ''}
                 {formatRialAsToman(overview.investmentProfitRial)} تومان سود/زیان
@@ -147,15 +147,15 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
         </div>
 
         {/* 4. Total Loan Debt Remaining */}
-        <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-5 relative overflow-hidden group hover:border-slate-700 transition-all">
+        <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 sm:p-5 relative overflow-hidden group hover:border-slate-700 transition-all">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-400">مانده کل بدهی وام‌ها</span>
             <div className="w-8 h-8 rounded-xl bg-rose-500/10 text-rose-400 flex items-center justify-center">
               <CreditCard className="w-4 h-4" />
             </div>
           </div>
-          <div className="mt-3">
-            <div className="text-2xl font-black text-rose-400 font-num tracking-tight">
+          <div className="mt-2.5 sm:mt-3">
+            <div className="text-xl sm:text-2xl font-black text-rose-400 font-num tracking-tight break-words">
               {formatRialAsToman(overview.totalLoanRemainingRial)} <span className="text-xs font-normal text-slate-400">تومان</span>
             </div>
             <p className="text-[11px] text-slate-400 mt-1">

@@ -71,9 +71,9 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   return (
     <div className="space-y-5 max-w-4xl mx-auto">
       {/* Search & Filter Header Bar */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-3.5">
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 sm:p-4 space-y-3">
         {/* Search input and Direction Tabs */}
-        <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
+        <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3 items-stretch sm:items-center justify-between">
           <div className="relative flex-1">
             <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
             <input
@@ -81,32 +81,32 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
               placeholder="جستجو در توضیحات، متن پیامک یا دسته..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl pr-9 pl-3 py-2 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl pr-9 pl-3 py-2 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors min-h-[40px]"
             />
           </div>
 
           {/* Direction toggle pill */}
-          <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs shrink-0 self-start sm:self-auto">
+          <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs w-full sm:w-auto">
             <button
               onClick={() => setDirectionFilter('all')}
-              className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
-                directionFilter === 'all' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
+              className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-lg font-medium transition-all text-center min-h-[34px] flex items-center justify-center ${
+                directionFilter === 'all' ? 'bg-slate-800 text-white shadow-sm font-bold' : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               همه ({toPersianDigits(confirmedList.length)})
             </button>
             <button
               onClick={() => setDirectionFilter('expense')}
-              className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
-                directionFilter === 'expense' ? 'bg-rose-500/20 text-rose-300 shadow-sm' : 'text-slate-400 hover:text-slate-200'
+              className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-lg font-medium transition-all text-center min-h-[34px] flex items-center justify-center ${
+                directionFilter === 'expense' ? 'bg-rose-500/25 text-rose-300 shadow-sm font-bold' : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               مخارج
             </button>
             <button
               onClick={() => setDirectionFilter('income')}
-              className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
-                directionFilter === 'income' ? 'bg-emerald-500/20 text-emerald-300 shadow-sm' : 'text-slate-400 hover:text-slate-200'
+              className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-lg font-medium transition-all text-center min-h-[34px] flex items-center justify-center ${
+                directionFilter === 'income' ? 'bg-emerald-500/25 text-emerald-300 shadow-sm font-bold' : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               واریزها
@@ -115,14 +115,14 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
         </div>
 
         {/* Dropdown Filters (Account & Category) */}
-        <div className="flex flex-wrap gap-2.5 pt-2 border-t border-slate-800/80 text-xs">
+        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800/80 text-xs">
           {/* Account Filter */}
-          <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1.5 rounded-xl border border-slate-800">
-            <Building2 className="w-3.5 h-3.5 text-slate-400" />
+          <div className="flex-1 sm:flex-initial min-w-[140px] flex items-center gap-1.5 bg-slate-950 px-2.5 py-1.5 rounded-xl border border-slate-800 min-h-[36px]">
+            <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             <select
               value={selectedAccountId}
               onChange={(e) => setSelectedAccountId(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-              className="bg-transparent text-slate-300 focus:outline-none text-xs"
+              className="bg-transparent text-slate-300 focus:outline-none text-xs w-full cursor-pointer"
             >
               <option value="all">تمام حساب‌ها</option>
               {accounts.map((a) => (
@@ -134,12 +134,12 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
           </div>
 
           {/* Category Filter */}
-          <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1.5 rounded-xl border border-slate-800">
-            <Tag className="w-3.5 h-3.5 text-slate-400" />
+          <div className="flex-1 sm:flex-initial min-w-[140px] flex items-center gap-1.5 bg-slate-950 px-2.5 py-1.5 rounded-xl border border-slate-800 min-h-[36px]">
+            <Tag className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             <select
               value={selectedCategoryId}
               onChange={(e) => setSelectedCategoryId(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-              className="bg-transparent text-slate-300 focus:outline-none text-xs"
+              className="bg-transparent text-slate-300 focus:outline-none text-xs w-full cursor-pointer"
             >
               <option value="all">تمام دسته‌بندی‌ها</option>
               {categories.map((c) => (
@@ -158,7 +158,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                 setSelectedCategoryId('all');
                 setSearchTerm('');
               }}
-              className="text-xs text-blue-400 hover:text-blue-300 px-2 py-1"
+              className="text-xs text-blue-400 hover:text-blue-300 px-2.5 py-1.5 rounded-lg bg-blue-950/40 border border-blue-800/40 min-h-[36px] flex items-center"
             >
               پاک کردن فیلترها
             </button>
@@ -167,16 +167,16 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
       </div>
 
       {/* Filter Stats Bar */}
-      <div className="grid grid-cols-2 gap-3 text-xs">
-        <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3 text-xs">
+        <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
           <span className="text-slate-400">مجموع هزینه‌های فیلترشده:</span>
-          <span className="font-bold text-rose-400 font-num">
+          <span className="font-bold text-rose-400 font-num text-sm">
             {formatRialAsToman(totalFilteredExpense)} تومان
           </span>
         </div>
-        <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
+        <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
           <span className="text-slate-400">مجموع واریزی‌های فیلترشده:</span>
-          <span className="font-bold text-emerald-400 font-num">
+          <span className="font-bold text-emerald-400 font-num text-sm">
             +{formatRialAsToman(totalFilteredIncome)} تومان
           </span>
         </div>

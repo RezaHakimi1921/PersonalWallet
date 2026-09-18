@@ -240,11 +240,11 @@ export const InstallmentsView: React.FC<InstallmentsViewProps> = ({
 
       {/* Add Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 max-w-md w-full space-y-4 shadow-2xl my-auto max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-slate-100">افزودن قسط یا وام جدید</h3>
-              <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-slate-200">
+              <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-slate-200 p-1.5 rounded-lg hover:bg-slate-800">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -258,17 +258,17 @@ export const InstallmentsView: React.FC<InstallmentsViewProps> = ({
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   required
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 min-h-[38px]"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3">
                 <div>
                   <label className="block text-slate-400 mb-1">نوع تعهد:</label>
                   <select
                     value={type}
                     onChange={(e: any) => setType(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 min-h-[38px]"
                   >
                     <option value="installment">قسط کالا</option>
                     <option value="loan">وام بانکی</option>
@@ -285,12 +285,12 @@ export const InstallmentsView: React.FC<InstallmentsViewProps> = ({
                     value={dueDayOfMonth}
                     onChange={(e) => setDueDayOfMonth(e.target.value)}
                     required
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 min-h-[38px]"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3">
                 <div>
                   <label className="block text-slate-400 mb-1">مبلغ هر قسط (تومان):</label>
                   <input
@@ -299,7 +299,7 @@ export const InstallmentsView: React.FC<InstallmentsViewProps> = ({
                     value={installmentAmountToman}
                     onChange={(e) => setInstallmentAmountToman(e.target.value)}
                     required
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 min-h-[38px]"
                   />
                 </div>
 
@@ -312,7 +312,7 @@ export const InstallmentsView: React.FC<InstallmentsViewProps> = ({
                     value={totalCount}
                     onChange={(e) => setTotalCount(e.target.value)}
                     required
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 min-h-[38px]"
                   />
                 </div>
               </div>
@@ -324,21 +324,21 @@ export const InstallmentsView: React.FC<InstallmentsViewProps> = ({
                   placeholder="کارمزد، شماره قرارداد و..."
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 min-h-[38px]"
                 />
               </div>
 
               <div className="flex items-center gap-2 pt-2">
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl"
+                  className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl min-h-[40px]"
                 >
                   ثبت قسط جدید
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl"
+                  className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl min-h-[40px]"
                 >
                   انصراف
                 </button>
