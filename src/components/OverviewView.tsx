@@ -6,7 +6,8 @@ import {
   ArrowDownLeft, 
   Clock, 
   Eye,
-  EyeOff
+  EyeOff,
+  CheckCircle2
 } from 'lucide-react';
 import { OverviewSummary, Account, Transaction, Installment, Category } from '../types';
 import { formatRialAsToman, toPersianDigits, getBankMeta, formatShamsi } from '../utils/formatters';
