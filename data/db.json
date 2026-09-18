@@ -1,0 +1,251 @@
+{
+  "accounts": [
+    {
+      "id": 1,
+      "bank_code": "rasalat",
+      "display_name": "بانک رسالت",
+      "balance_rial": 259203041,
+      "card_number": "5041-7210-****-4412",
+      "color": "#059669",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 2,
+      "bank_code": "blu",
+      "display_name": "بلو بانک",
+      "balance_rial": 3859212,
+      "card_number": "6219-8619-****-8831",
+      "color": "#2563eb",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 3,
+      "bank_code": "pasargad",
+      "display_name": "بانک پاسارگاد",
+      "balance_rial": 6326366,
+      "card_number": "5022-2910-****-1921",
+      "color": "#d97706",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    }
+  ],
+  "categories": [
+    {
+      "id": 1,
+      "name": "رفت و آمد",
+      "direction": "expense",
+      "is_active": true,
+      "icon": "Car",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 2,
+      "name": "خوراکی",
+      "direction": "expense",
+      "is_active": true,
+      "icon": "ShoppingBag",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 3,
+      "name": "غذا",
+      "direction": "expense",
+      "is_active": true,
+      "icon": "Utensils",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 4,
+      "name": "خانواده",
+      "direction": "expense",
+      "is_active": true,
+      "icon": "Heart",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 5,
+      "name": "شخصی",
+      "direction": "expense",
+      "is_active": true,
+      "icon": "User",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 6,
+      "name": "وسیله نقلیه",
+      "direction": "expense",
+      "is_active": true,
+      "icon": "Wrench",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 7,
+      "name": "توسعه شخصی",
+      "direction": "expense",
+      "is_active": true,
+      "icon": "BookOpen",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 8,
+      "name": "هدیه",
+      "direction": "expense",
+      "is_active": true,
+      "icon": "Gift",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 9,
+      "name": "آرایشگاه",
+      "direction": "expense",
+      "is_active": true,
+      "icon": "Scissors",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 10,
+      "name": "قسط",
+      "direction": "expense",
+      "is_active": true,
+      "icon": "CreditCard",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 11,
+      "name": "ناشناخته",
+      "direction": "expense",
+      "is_active": true,
+      "icon": "HelpCircle",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 12,
+      "name": "درآمد کار",
+      "direction": "income",
+      "is_active": true,
+      "icon": "Briefcase",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 13,
+      "name": "درآمد شخصی",
+      "direction": "income",
+      "is_active": true,
+      "icon": "TrendingUp",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 14,
+      "name": "ناشناخته",
+      "direction": "income",
+      "is_active": true,
+      "icon": "HelpCircle",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    }
+  ],
+  "installments": [
+    {
+      "id": 1,
+      "title": "وام رسالت",
+      "type": "loan",
+      "total_amount_rial": 500000000,
+      "installment_amount_rial": 25000000,
+      "total_count": 24,
+      "paid_count": 8,
+      "due_day_of_month": 15,
+      "status": "active",
+      "note": "وام قرض‌الحسنه کارمزد ۲٪",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 2,
+      "title": "قسط لپ‌تاپ (دیجی‌پی)",
+      "type": "installment",
+      "total_amount_rial": 800000000,
+      "installment_amount_rial": 80000000,
+      "total_count": 10,
+      "paid_count": 4,
+      "due_day_of_month": 25,
+      "status": "active",
+      "note": "خرید اقساطی لپ‌تاپ",
+      "created_at": "2026-09-18T20:27:54.706Z"
+    }
+  ],
+  "investments": [
+    {
+      "id": 1,
+      "title": "صندوق طلا (عیار / کهربا)",
+      "invested_amount_rial": 1500000000,
+      "current_value_rial": 1820000000,
+      "note": "خرید پله‌ای واحدهای طلا",
+      "created_at": "2026-09-18T20:27:54.706Z",
+      "updated_at": "2026-09-18T20:27:54.706Z"
+    },
+    {
+      "id": 2,
+      "title": "تتر (USDT)",
+      "invested_amount_rial": 800000000,
+      "current_value_rial": 940000000,
+      "note": "پس‌انداز ارزی نوبیتکس",
+      "created_at": "2026-09-18T20:27:54.706Z",
+      "updated_at": "2026-09-18T20:27:54.706Z"
+    }
+  ],
+  "transactions": [
+    {
+      "id": 1,
+      "account_id": 2,
+      "amount_rial": 1250000,
+      "direction": "expense",
+      "balance_after_rial": 3859212,
+      "raw_text": "خرید از اسنپ فود - مبلغ: ۱۲۵،۰۰۰ ریال از حساب بلو پرید. موجودی: ۳،۸۵۹،۲۱۲",
+      "bank_reported_time": "14:20",
+      "status": "pending",
+      "category_id": null,
+      "note": "سفارش ناهار اسنپ",
+      "installment_id": null,
+      "created_at": "2026-09-18T18:27:54.706Z"
+    },
+    {
+      "id": 2,
+      "account_id": 1,
+      "amount_rial": 25000000,
+      "direction": "expense",
+      "balance_after_rial": 259203041,
+      "raw_text": "-۲۵،۰۰۰،۰۰۰ مانده: ۲۵۹،۲۰۳،۰۴۱ انتقال پایا رسالت",
+      "bank_reported_time": "09:15",
+      "status": "pending",
+      "category_id": null,
+      "note": "احتمالاً قسط رسالت",
+      "installment_id": 1,
+      "created_at": "2026-09-18T14:27:54.706Z"
+    },
+    {
+      "id": 3,
+      "account_id": 1,
+      "amount_rial": 150000000,
+      "direction": "income",
+      "balance_after_rial": 284203041,
+      "raw_text": "+۱۵۰،۰۰۰،۰۰۰ مانده: ۲۸۴،۲۰۳،۰۴۱ واریز حقوق",
+      "bank_reported_time": "11:00",
+      "status": "confirmed",
+      "category_id": 12,
+      "note": "واریز حقوق ماهانه",
+      "installment_id": null,
+      "created_at": "2026-09-16T20:27:54.706Z"
+    },
+    {
+      "id": 4,
+      "account_id": 2,
+      "amount_rial": 4500000,
+      "direction": "expense",
+      "balance_after_rial": 5109212,
+      "raw_text": "خرید از فروشگاه هایپرمی",
+      "bank_reported_time": "19:40",
+      "status": "confirmed",
+      "category_id": 2,
+      "note": "خرید هفتگی سوپرمارکت",
+      "installment_id": null,
+      "created_at": "2026-09-15T20:27:54.706Z"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "کیف پول شخصی | PersonalWallet",
+  "description": "سامانه هوشمند و مدرن مدیریت دخل‌وخرج، حساب‌های بانکی، پارسر پیامک، اقساط و سرمایه‌گذاری‌ها",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
