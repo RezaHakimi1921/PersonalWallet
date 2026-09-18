@@ -7,6 +7,20 @@ function toman(rial) {
   return Math.round(rial / 10).toLocaleString('en-US');
 }
 
+// Live-format a text input with thousand separators as the user types (numeric inputs
+// don't support commas, so these must be type="text" with inputmode="numeric").
+function wireThousandsInput(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('input', () => {
+    const digits = el.value.replace(/\D/g, '');
+    el.value = digits ? Number(digits).toLocaleString('en-US') : '';
+  });
+}
+function numFromInput(id) {
+  return Number((document.getElementById(id).value || '').replace(/,/g, ''));
+}
+
 async function api(path, opts) {
   const res = await fetch(API + path, {
     headers: { 'Content-Type': 'application/json' },
@@ -33,10 +47,11 @@ moreSheet.addEventListener('click', (e) => { if (e.target === moreSheet) moreShe
 const PRIVACY_KEY = 'pw-privacy-mode';
 const btnPrivacy = document.getElementById('btn-privacy');
 function applyPrivacyMode(on) {
-  document.body.classList.toggle('privacy-blur-scope', on);
+  // CSS rule `body.privacy-on .privacy-target` handles the blur, so it applies
+  // instantly to any content rendered later too — no re-query/flash on tab switch.
+  document.body.classList.toggle('privacy-on', on);
   btnPrivacy.classList.toggle('active', on);
   btnPrivacy.textContent = on ? '🙈 نمایش ارقام' : '👁 محو کردن ارقام';
-  document.querySelectorAll('.privacy-target').forEach((el) => el.classList.toggle('privacy-blur', on));
 }
 btnPrivacy.addEventListener('click', () => {
   const on = !btnPrivacy.classList.contains('active');
@@ -270,14 +285,14 @@ function txCard(t, cats, editable, accounts) {
         </span>
         <span class="muted">${t.account_name}</span>
       </div>
-      <div class="muted">موجودی بعد از تراکنش: ${t.balance_after_rial != null ? toman(t.balance_after_rial) + ' تومان' : '-'}</div>
+      <div class="muted">موجودی بعد از تراکنش: <span class="privacy-target font-num">${t.balance_after_rial != null ? toman(t.balance_after_rial) + ' تومان' : '-'}</span></div>
       ${editable ? `
         <select id="cat-${t.id}"><option value="">انتخاب دسته‌بندی...</option>${options}</select>
         ${otherAccountFieldHtml(t.id, accounts, t.account_id)}
         <input id="note-${t.id}" placeholder="توضیح (اختیاری)" />
         <div class="row" style="gap:8px">
           <button class="action" id="confirm-${t.id}" style="flex:1">ثبت و قطعی</button>
-          <button class="action secondary" id="delete-${t.id}" style="width:auto;flex:0 0 auto">🗑</button>
+          <button class="action danger" id="delete-${t.id}" style="width:auto;flex:0 0 auto">🗑</button>
         </div>
       ` : ''}
     </div>
@@ -334,16 +349,16 @@ async function renderInstallments() {
       <strong>افزودن قسط/وام جدید</strong>
       <input id="i-title" placeholder="عنوان (مثلا: وام خودرو)" />
       <select id="i-type"><option value="installment">قسط</option><option value="loan">وام</option></select>
-      <input id="i-amount" type="number" placeholder="مبلغ هر قسط (تومان)" />
-      <input id="i-count" type="number" placeholder="تعداد کل اقساط" />
-      <input id="i-day" type="number" placeholder="روز موعد در ماه (شمسی)" min="1" max="31" />
+      <input id="i-amount" type="text" inputmode="numeric" placeholder="مبلغ هر قسط (تومان)" />
+      <input id="i-count" type="text" inputmode="numeric" placeholder="تعداد کل اقساط" />
+      <input id="i-day" type="text" inputmode="numeric" placeholder="روز موعد در ماه (شمسی)" />
       <button class="action" id="i-add">افزودن</button>
     </div>
   ` + (items.length === 0 ? '<p class="muted">قسطی ثبت نشده.</p>' : items.map((i) => {
     const percent = Math.round((i.paid_count / i.total_count) * 100);
     const remaining = i.installment_amount_rial * (i.total_count - i.paid_count);
     return `
-    <div class="card">
+    <div class="card" id="inst-${i.id}">
       <div class="row">
         <strong>${i.title}</strong>
         <span class="badge ${i.status}">${i.status === 'completed' ? 'تکمیل‌شده' : (i.type === 'loan' ? 'وام فعال' : 'قسط فعال')}</span>
@@ -356,20 +371,30 @@ async function renderInstallments() {
       ${i.status === 'active' ? `
         <div class="row" style="margin-top:8px">
           <span class="muted" style="font-size:.75rem">مانده بدهی</span>
-          <strong class="font-num" style="color:var(--red)">${toman(remaining)} تومان</strong>
+          <strong class="font-num privacy-target" style="color:var(--red)">${toman(remaining)} تومان</strong>
         </div>
-        <button class="action secondary" data-pay="${i.id}">ثبت پرداخت دستی</button>
-      ` : ''}
+        <div class="row" style="gap:8px">
+          <button class="action pay" data-pay="${i.id}" style="flex:1">ثبت پرداخت دستی</button>
+          <button class="action secondary" data-edit-inst="${i.id}" style="width:auto">✎</button>
+          <button class="action danger" data-delete-inst="${i.id}" style="width:auto">🗑</button>
+        </div>
+      ` : `
+        <button class="action danger" data-delete-inst="${i.id}" style="margin-top:8px">🗑 حذف</button>
+      `}
     </div>
   `;
   }).join(''));
 
+  wireThousandsInput('i-amount');
+  wireThousandsInput('i-count');
+  wireThousandsInput('i-day');
+
   document.getElementById('i-add').addEventListener('click', async () => {
     const title = document.getElementById('i-title').value;
     const type = document.getElementById('i-type').value;
-    const installment_amount_toman = Number(document.getElementById('i-amount').value);
-    const total_count = Number(document.getElementById('i-count').value);
-    const due_day_of_month = Number(document.getElementById('i-day').value);
+    const installment_amount_toman = numFromInput('i-amount');
+    const total_count = numFromInput('i-count');
+    const due_day_of_month = numFromInput('i-day');
     if (!title || !installment_amount_toman || !total_count || !due_day_of_month) return;
     await api('/installments', {
       method: 'POST',
@@ -384,7 +409,40 @@ async function renderInstallments() {
 
   document.querySelectorAll('[data-pay]').forEach((b) => {
     b.addEventListener('click', async () => {
+      if (!confirm('پرداخت این قسط ثبت شود؟ این عملیات قابل بازگشت نیست.')) return;
       await api(`/installments/${b.dataset.pay}/pay`, { method: 'POST' });
+      renderInstallments();
+    });
+  });
+
+  document.querySelectorAll('[data-delete-inst]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      if (!confirm('این قسط/وام کاملاً حذف شود؟')) return;
+      await api(`/installments/${b.dataset.deleteInst}`, { method: 'DELETE' });
+      renderInstallments();
+    });
+  });
+
+  document.querySelectorAll('[data-edit-inst]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const item = items.find((i) => i.id === Number(b.dataset.editInst));
+      const newTitle = prompt('عنوان:', item.title);
+      if (newTitle == null) return;
+      const newAmount = prompt('مبلغ هر قسط (تومان):', toman(item.installment_amount_rial));
+      if (newAmount == null) return;
+      const newCount = prompt('تعداد کل اقساط:', item.total_count);
+      if (newCount == null) return;
+      const newDay = prompt('روز موعد در ماه:', item.due_day_of_month);
+      if (newDay == null) return;
+      await api(`/installments/${item.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          title: newTitle,
+          installment_amount_rial: Number(newAmount.replace(/,/g, '')) * 10,
+          total_count: Number(newCount),
+          due_day_of_month: Number(newDay),
+        }),
+      });
       renderInstallments();
     });
   });
@@ -410,7 +468,7 @@ async function renderInvestments() {
     <div class="card">
       <strong>افزودن سرمایه‌گذاری</strong>
       <input id="v-title" placeholder="عنوان (مثلا: طلا)" />
-      <input id="v-amount" type="number" placeholder="مبلغ سرمایه‌گذاری‌شده (تومان)" />
+      <input id="v-amount" type="text" inputmode="numeric" placeholder="مبلغ سرمایه‌گذاری‌شده (تومان)" />
       <button class="action" id="v-add">افزودن</button>
     </div>
   ` + (items.length === 0 ? '<p class="muted">سرمایه‌گذاری ثبت نشده.</p>' : items.map((v) => {
@@ -425,16 +483,19 @@ async function renderInvestments() {
       </div>
       <div class="muted">مبلغ اولیه: ${toman(v.invested_amount_rial)} تومان</div>
       <div class="grid2">
-        <input id="v-cur-${v.id}" type="number" placeholder="ارزش فعلی (تومان)" value="${toman(v.current_value_rial)}" />
+        <input id="v-cur-${v.id}" type="text" inputmode="numeric" placeholder="ارزش فعلی (تومان)" value="${toman(v.current_value_rial)}" />
         <button class="action secondary" data-update="${v.id}">به‌روزرسانی</button>
       </div>
     </div>
   `;
   }).join(''));
 
+  wireThousandsInput('v-amount');
+  items.forEach((v) => wireThousandsInput(`v-cur-${v.id}`));
+
   document.getElementById('v-add').addEventListener('click', async () => {
     const title = document.getElementById('v-title').value;
-    const amountToman = Number(document.getElementById('v-amount').value);
+    const amountToman = numFromInput('v-amount');
     if (!title || !amountToman) return;
     await api('/investments', {
       method: 'POST',
@@ -446,7 +507,7 @@ async function renderInvestments() {
   document.querySelectorAll('[data-update]').forEach((b) => {
     b.addEventListener('click', async () => {
       const id = b.dataset.update;
-      const val = Number(document.getElementById(`v-cur-${id}`).value) * 10;
+      const val = numFromInput(`v-cur-${id}`) * 10;
       await api(`/investments/${id}`, { method: 'PUT', body: JSON.stringify({ current_value_rial: val }) });
       renderInvestments();
     });
@@ -515,7 +576,7 @@ async function openManualModal() {
         <option value="expense">کسر از حساب</option>
         <option value="income">واریز به حساب</option>
       </select>
-      <input id="m-amount" type="number" placeholder="مبلغ (تومان)" />
+      <input id="m-amount" type="text" inputmode="numeric" placeholder="مبلغ (تومان)" />
       <select id="m-category">${renderCatOptions('expense')}</select>
       ${otherAccountFieldHtml('m', accounts, null)}
       <input id="m-note" placeholder="توضیح (اختیاری)" />
@@ -524,6 +585,7 @@ async function openManualModal() {
     </div>
   `;
   manualModal.hidden = false;
+  wireThousandsInput('m-amount');
 
   document.getElementById('m-direction').addEventListener('change', (e) => {
     document.getElementById('m-category').innerHTML = renderCatOptions(e.target.value);
@@ -533,7 +595,7 @@ async function openManualModal() {
   document.getElementById('m-save').addEventListener('click', async () => {
     const account_id = document.getElementById('m-account').value;
     const direction = document.getElementById('m-direction').value;
-    const amountToman = Number(document.getElementById('m-amount').value);
+    const amountToman = numFromInput('m-amount');
     const category_id = document.getElementById('m-category').value || null;
     let note = document.getElementById('m-note').value || null;
     const otherAccountSelect = document.getElementById('other-account-m');

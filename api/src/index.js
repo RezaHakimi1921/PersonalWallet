@@ -298,6 +298,30 @@ app.post('/installments', async (req, res) => {
   res.json(result.rows[0]);
 });
 
+app.put('/installments/:id', async (req, res) => {
+  const { id } = req.params;
+  const { title, installment_amount_rial, total_count, due_day_of_month, note } = req.body || {};
+  const result = await pool.query(
+    `UPDATE installments SET
+       title = COALESCE($1, title),
+       installment_amount_rial = COALESCE($2, installment_amount_rial),
+       total_count = COALESCE($3, total_count),
+       due_day_of_month = COALESCE($4, due_day_of_month),
+       note = COALESCE($5, note)
+     WHERE id = $6 RETURNING *`,
+    [title ?? null, installment_amount_rial ?? null, total_count ?? null, due_day_of_month ?? null, note ?? null, id]
+  );
+  if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
+  res.json(result.rows[0]);
+});
+
+app.delete('/installments/:id', async (req, res) => {
+  const { id } = req.params;
+  const result = await pool.query('DELETE FROM installments WHERE id = $1 RETURNING id', [id]);
+  if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
+  res.json({ ok: true });
+});
+
 app.post('/installments/:id/pay', async (req, res) => {
   const { id } = req.params;
   const instRes = await pool.query('UPDATE installments SET paid_count = paid_count + 1 WHERE id = $1 RETURNING *', [id]);
