@@ -55,11 +55,12 @@ app.post('/webhook/sms', async (req, res) => {
     }
 
     const { amount_rial, direction, balance_after_rial } = parsed;
+    const currentBalance = Number(account.balance_rial);
     const newBalance = balance_after_rial != null
       ? balance_after_rial
       : direction === 'income'
-        ? account.balance_rial + amount_rial
-        : account.balance_rial - amount_rial;
+        ? currentBalance + amount_rial
+        : currentBalance - amount_rial;
 
     await client.query('UPDATE accounts SET balance_rial = $1 WHERE id = $2', [newBalance, account.id]);
 

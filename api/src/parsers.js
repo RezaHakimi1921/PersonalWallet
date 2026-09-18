@@ -37,7 +37,7 @@ function parseBlu(text) {
 }
 
 const PARSERS = {
-  rasalat: parseSignedFormat,
+  resalat: parseSignedFormat,
   pasargad: parseSignedFormat,
   blu: parseBlu,
 };

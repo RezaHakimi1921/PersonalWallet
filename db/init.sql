@@ -55,7 +55,7 @@ CREATE TABLE transactions (
 );
 
 INSERT INTO accounts (bank_code, display_name, balance_rial) VALUES
-  ('rasalat', 'بانک رسالت', 259203041),
+  ('resalat', 'بانک رسالت', 259203041),
   ('blu', 'بلو', 3859212),
   ('pasargad', 'بانک پاسارگاد', 6326366);
 
