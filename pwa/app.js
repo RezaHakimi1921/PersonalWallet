@@ -1,6 +1,7 @@
 const API = '/api';
 const content = document.getElementById('content');
-const navButtons = document.querySelectorAll('nav button');
+const tabButtons = document.querySelectorAll('[data-tab]');
+const moreSheet = document.getElementById('more-sheet');
 
 function toman(rial) {
   return Math.round(rial / 10).toLocaleString('en-US');
@@ -15,17 +16,48 @@ async function api(path, opts) {
   return res.json();
 }
 
-navButtons.forEach((btn) => {
-  btn.addEventListener('click', () => {
-    navButtons.forEach((b) => b.classList.remove('active'));
-    btn.classList.add('active');
-    render(btn.dataset.tab);
-  });
+function setActiveTab(tab) {
+  tabButtons.forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  moreSheet.hidden = true;
+  render(tab);
+}
+
+tabButtons.forEach((btn) => {
+  btn.addEventListener('click', () => setActiveTab(btn.dataset.tab));
 });
+
+document.getElementById('btn-more').addEventListener('click', () => { moreSheet.hidden = false; });
+document.getElementById('btn-more-close').addEventListener('click', () => { moreSheet.hidden = true; });
+moreSheet.addEventListener('click', (e) => { if (e.target === moreSheet) moreSheet.hidden = true; });
+
+const PRIVACY_KEY = 'pw-privacy-mode';
+const btnPrivacy = document.getElementById('btn-privacy');
+function applyPrivacyMode(on) {
+  document.body.classList.toggle('privacy-blur-scope', on);
+  btnPrivacy.classList.toggle('active', on);
+  btnPrivacy.textContent = on ? '🙈 نمایش ارقام' : '👁 محو کردن ارقام';
+  document.querySelectorAll('.privacy-target').forEach((el) => el.classList.toggle('privacy-blur', on));
+}
+btnPrivacy.addEventListener('click', () => {
+  const on = !btnPrivacy.classList.contains('active');
+  localStorage.setItem(PRIVACY_KEY, on ? '1' : '0');
+  applyPrivacyMode(on);
+});
+
+async function updatePendingBadge() {
+  try {
+    const pending = await api('/transactions?status=pending');
+    const badge = document.getElementById('pending-badge');
+    badge.hidden = pending.length === 0;
+    badge.textContent = pending.length;
+  } catch (e) { /* ignore */ }
+}
 
 async function render(tab) {
   content.innerHTML = '<p class="muted">در حال بارگذاری...</p>';
+  updatePendingBadge();
   try {
+    if (tab === 'overview') return renderOverview();
     if (tab === 'pending') return renderPending();
     if (tab === 'transactions') return renderTransactions();
     if (tab === 'accounts') return renderAccounts();
@@ -34,7 +66,74 @@ async function render(tab) {
     if (tab === 'categories') return renderCategories();
   } catch (e) {
     content.innerHTML = '<p class="muted">خطا در بارگذاری اطلاعات</p>';
+  } finally {
+    applyPrivacyMode(btnPrivacy.classList.contains('active'));
   }
+}
+
+async function renderOverview() {
+  const [accounts, pending, installments, transactions] = await Promise.all([
+    api('/accounts'), api('/transactions?status=pending'), api('/installments'), api('/transactions'),
+  ]);
+
+  const totalCash = accounts.reduce((sum, a) => sum + Number(a.balance_rial), 0);
+  const activeInstallments = installments.filter((i) => i.status === 'active');
+  const remainingDebt = activeInstallments.reduce(
+    (sum, i) => sum + i.installment_amount_rial * (i.total_count - i.paid_count), 0
+  );
+  const now = new Date();
+  const thisMonthTx = transactions.filter((t) => {
+    const d = new Date(t.created_at);
+    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && t.status === 'confirmed';
+  });
+  const monthExpense = thisMonthTx.filter((t) => t.direction === 'expense').reduce((s, t) => s + Number(t.amount_rial), 0);
+  const monthIncome = thisMonthTx.filter((t) => t.direction === 'income').reduce((s, t) => s + Number(t.amount_rial), 0);
+
+  let html = '';
+  if (pending.length > 0) {
+    html += `
+      <div class="card" style="border-color:rgba(245,158,11,.4);background:rgba(120,53,15,.25)">
+        <div class="row">
+          <div>
+            <strong style="color:#fbbf24">⏰ ${pending.length} تراکنش در انتظار تایید</strong>
+            <div class="muted">پیامک‌های بانکی جدید نیاز به دسته‌بندی دارند.</div>
+          </div>
+          <button class="action" id="goto-pending" style="width:auto;margin:0">مشاهده</button>
+        </div>
+      </div>`;
+  }
+
+  html += `
+    <div class="metric-grid">
+      <div class="metric-card">
+        <div class="metric-label"><span>موجودی نقدی کل</span> 💰</div>
+        <div class="metric-value privacy-target" style="color:var(--green)">${toman(totalCash)} <span class="muted" style="font-size:.7rem">تومان</span></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label"><span>مانده بدهی اقساط</span> 💳</div>
+        <div class="metric-value privacy-target" style="color:var(--red)">${toman(remainingDebt)} <span class="muted" style="font-size:.7rem">تومان</span></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label"><span>هزینه این ماه</span> ⬇️</div>
+        <div class="metric-value privacy-target" style="color:var(--red)">${toman(monthExpense)} <span class="muted" style="font-size:.7rem">تومان</span></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label"><span>درآمد این ماه</span> ⬆️</div>
+        <div class="metric-value privacy-target" style="color:var(--green)">${toman(monthIncome)} <span class="muted" style="font-size:.7rem">تومان</span></div>
+      </div>
+    </div>
+  `;
+
+  html += accounts.map((a) => `
+    <div class="card row">
+      <span>${a.display_name}</span>
+      <strong class="privacy-target font-num">${toman(a.balance_rial)} تومان</strong>
+    </div>
+  `).join('');
+
+  content.innerHTML = html;
+  const gotoBtn = document.getElementById('goto-pending');
+  if (gotoBtn) gotoBtn.addEventListener('click', () => setActiveTab('pending'));
 }
 
 async function renderPending() {
@@ -133,7 +232,7 @@ async function renderAccounts() {
   content.innerHTML = accounts.map((a) => `
     <div class="card row">
       <span>${a.display_name}</span>
-      <strong>${toman(a.balance_rial)} تومان</strong>
+      <strong class="privacy-target font-num">${toman(a.balance_rial)} تومان</strong>
     </div>
   `).join('');
 }
@@ -311,18 +410,20 @@ async function openManualModal() {
       body: JSON.stringify({ account_id, amount_rial: amountToman * 10, direction, category_id, note }),
     });
     manualModal.hidden = true;
-    const activeTab = document.querySelector('nav button.active')?.dataset.tab;
+    const activeTab = [...tabButtons].find((b) => b.classList.contains('active'))?.dataset.tab;
     if (activeTab) render(activeTab);
   });
 }
 
 fab.addEventListener('click', openManualModal);
+document.getElementById('nav-fab').addEventListener('click', openManualModal);
+
+// restore privacy mode preference
+applyPrivacyMode(localStorage.getItem(PRIVACY_KEY) === '1');
 
 // deep link support: #/tx/123 -> open pending tab
 if (location.hash.startsWith('#/tx/')) {
-  navButtons.forEach((b) => b.classList.remove('active'));
-  document.querySelector('[data-tab="pending"]').classList.add('active');
-  render('pending');
+  setActiveTab('pending');
 } else {
-  render('pending');
+  setActiveTab('overview');
 }
