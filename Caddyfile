@@ -1,0 +1,10 @@
+78-39-51-105.nip.io {
+	handle_path /api/* {
+		reverse_proxy api:3000
+	}
+	handle {
+		root * /srv/pwa
+		file_server
+		try_files {path} /index.html
+	}
+}
