@@ -39,6 +39,16 @@
   button.secondary { background: #2a3444; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   [hidden] { display: none !important; }
+  #fab {
+    position: fixed; left: 20px; bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+    width: 56px; height: 56px; border-radius: 50%; background: #3b82f6; color: white;
+    font-size: 1.8rem; border: none; box-shadow: 0 4px 12px rgba(0,0,0,.4); z-index: 50;
+  }
+  #manual-modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 60;
+    display: flex; align-items: center; justify-content: center; padding: 16px;
+  }
+  #manual-modal .card { width: 100%; max-width: 360px; margin: 0; }
 </style>
 </head>
 <body>
@@ -52,6 +62,9 @@
     <button data-tab="categories">دسته‌بندی‌ها</button>
   </nav>
   <div id="content"></div>
+
+  <button id="fab" title="ثبت دستی تراکنش">+</button>
+  <div id="manual-modal" hidden></div>
 
   <script src="/app.js"></script>
 </body>

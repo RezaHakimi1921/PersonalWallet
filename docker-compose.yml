@@ -4,7 +4,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: pw
-      POSTGRES_PASSWORD: "46329bae68e75208ffdabd95ff4f700b"
+      POSTGRES_PASSWORD: "${DB_PASSWORD}"
       POSTGRES_DB: personalwallet
     volumes:
       - dbdata:/var/lib/postgresql/data
@@ -19,10 +19,10 @@ services:
     build: ./api
     restart: unless-stopped
     environment:
-      DATABASE_URL: "postgres://pw:46329bae68e75208ffdabd95ff4f700b@db:5432/personalwallet"
+      DATABASE_URL: "postgres://pw:${DB_PASSWORD}@db:5432/personalwallet"
       NTFY_URL: "https://ntfy.sh"
-      NTFY_TOPIC: "pw-590a5dd3a7f749b1"
-      PUBLIC_BASE_URL: "https://78-39-51-105.nip.io"
+      NTFY_TOPIC: "${NTFY_TOPIC}"
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL}"
       TZ: "Asia/Tehran"
     depends_on:
       db:

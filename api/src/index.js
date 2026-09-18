@@ -142,6 +142,37 @@ app.get('/transactions', async (req, res) => {
   res.json(result.rows);
 });
 
+// Manual entry: for when the automatic SMS webhook doesn't fire.
+app.post('/transactions/manual', async (req, res) => {
+  const { account_id, amount_rial, direction, category_id, note } = req.body || {};
+  if (!account_id || !amount_rial || !['expense', 'income'].includes(direction)) {
+    return res.status(400).json({ error: 'account_id, amount_rial and direction are required' });
+  }
+  const client = await pool.connect();
+  try {
+    const accountRes = await client.query('SELECT * FROM accounts WHERE id = $1', [account_id]);
+    if (accountRes.rows.length === 0) return res.status(404).json({ error: 'account not found' });
+    const account = accountRes.rows[0];
+
+    const newBalance = direction === 'income'
+      ? account.balance_rial + Number(amount_rial)
+      : account.balance_rial - Number(amount_rial);
+    await client.query('UPDATE accounts SET balance_rial = $1 WHERE id = $2', [newBalance, account_id]);
+
+    const txRes = await client.query(
+      `INSERT INTO transactions (account_id, amount_rial, direction, balance_after_rial, raw_text, status, category_id, note)
+       VALUES ($1, $2, $3, $4, 'manual entry', 'confirmed', $5, $6) RETURNING *`,
+      [account_id, amount_rial, direction, newBalance, category_id || null, note || null]
+    );
+    res.json(txRes.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  } finally {
+    client.release();
+  }
+});
+
 app.post('/transactions/:id/confirm', async (req, res) => {
   const { id } = req.params;
   const { category_id, note } = req.body || {};

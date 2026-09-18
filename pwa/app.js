@@ -231,6 +231,58 @@ async function renderCategories() {
   });
 }
 
+// Manual transaction entry (fallback for when the automatic SMS webhook doesn't fire)
+const fab = document.getElementById('fab');
+const manualModal = document.getElementById('manual-modal');
+
+async function openManualModal() {
+  const [accounts, cats] = await Promise.all([api('/accounts'), api('/categories')]);
+  const accountOptions = accounts.map((a) => `<option value="${a.id}">${a.display_name}</option>`).join('');
+  const renderCatOptions = (direction) => cats
+    .filter((c) => c.direction === direction)
+    .map((c) => `<option value="${c.id}">${c.name}</option>`)
+    .join('');
+
+  manualModal.innerHTML = `
+    <div class="card">
+      <strong>ثبت دستی تراکنش</strong>
+      <select id="m-account">${accountOptions}</select>
+      <select id="m-direction">
+        <option value="expense">کسر از حساب</option>
+        <option value="income">واریز به حساب</option>
+      </select>
+      <input id="m-amount" type="number" placeholder="مبلغ (تومان)" />
+      <select id="m-category">${renderCatOptions('expense')}</select>
+      <input id="m-note" placeholder="توضیح (اختیاری)" />
+      <button class="action" id="m-save">ثبت</button>
+      <button class="action secondary" id="m-cancel">انصراف</button>
+    </div>
+  `;
+  manualModal.hidden = false;
+
+  document.getElementById('m-direction').addEventListener('change', (e) => {
+    document.getElementById('m-category').innerHTML = renderCatOptions(e.target.value);
+  });
+  document.getElementById('m-cancel').addEventListener('click', () => { manualModal.hidden = true; });
+  document.getElementById('m-save').addEventListener('click', async () => {
+    const account_id = document.getElementById('m-account').value;
+    const direction = document.getElementById('m-direction').value;
+    const amountToman = Number(document.getElementById('m-amount').value);
+    const category_id = document.getElementById('m-category').value || null;
+    const note = document.getElementById('m-note').value || null;
+    if (!account_id || !amountToman) return;
+    await api('/transactions/manual', {
+      method: 'POST',
+      body: JSON.stringify({ account_id, amount_rial: amountToman * 10, direction, category_id, note }),
+    });
+    manualModal.hidden = true;
+    const activeTab = document.querySelector('nav button.active')?.dataset.tab;
+    if (activeTab) render(activeTab);
+  });
+}
+
+fab.addEventListener('click', openManualModal);
+
 // deep link support: #/tx/123 -> open pending tab
 if (location.hash.startsWith('#/tx/')) {
   navButtons.forEach((b) => b.classList.remove('active'));
