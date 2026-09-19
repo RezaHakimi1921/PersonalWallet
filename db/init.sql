@@ -32,6 +32,10 @@ CREATE TABLE installments (
 CREATE TABLE investments (
   id SERIAL PRIMARY KEY,
   title TEXT NOT NULL,
+  asset_type TEXT NOT NULL DEFAULT 'other' CHECK (asset_type IN ('gold','coin','dollar','other')),
+  quantity NUMERIC,
+  purchase_unit_price_rial BIGINT,
+  current_unit_price_rial BIGINT,
   invested_amount_rial BIGINT NOT NULL,
   current_value_rial BIGINT NOT NULL,
   note TEXT,

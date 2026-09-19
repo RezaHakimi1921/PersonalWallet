@@ -199,6 +199,52 @@ app.delete('/transactions/:id', async (req, res) => {
   }
 });
 
+// Edit an already-recorded transaction's amount/direction/account/category,
+// reconciling the account balance(s) for the change.
+app.put('/transactions/:id/edit', async (req, res) => {
+  const { id } = req.params;
+  const { amount_rial, direction, account_id, category_id, note } = req.body || {};
+  const client = await pool.connect();
+  try {
+    const txRes = await client.query('SELECT * FROM transactions WHERE id = $1', [id]);
+    if (txRes.rows.length === 0) return res.status(404).json({ error: 'not found' });
+    const tx = txRes.rows[0];
+
+    const newAmount = amount_rial != null ? Number(amount_rial) : Number(tx.amount_rial);
+    const newDirection = direction || tx.direction;
+    const newAccountId = account_id != null ? Number(account_id) : tx.account_id;
+
+    // revert the old effect on the old account
+    const oldAccountRes = await client.query('SELECT * FROM accounts WHERE id = $1', [tx.account_id]);
+    const oldAccount = oldAccountRes.rows[0];
+    const revertedOldBalance = tx.direction === 'income'
+      ? Number(oldAccount.balance_rial) - Number(tx.amount_rial)
+      : Number(oldAccount.balance_rial) + Number(tx.amount_rial);
+    await client.query('UPDATE accounts SET balance_rial = $1 WHERE id = $2', [revertedOldBalance, tx.account_id]);
+
+    // apply the new effect on the (possibly different) account
+    const targetAccountRes = await client.query('SELECT * FROM accounts WHERE id = $1', [newAccountId]);
+    const targetAccount = targetAccountRes.rows[0];
+    const targetCurrentBalance = newAccountId === tx.account_id ? revertedOldBalance : Number(targetAccount.balance_rial);
+    const newBalance = newDirection === 'income'
+      ? targetCurrentBalance + newAmount
+      : targetCurrentBalance - newAmount;
+    await client.query('UPDATE accounts SET balance_rial = $1 WHERE id = $2', [newBalance, newAccountId]);
+
+    const result = await client.query(
+      `UPDATE transactions SET amount_rial = $1, direction = $2, account_id = $3, category_id = $4, note = COALESCE($5, note), balance_after_rial = $6
+       WHERE id = $7 RETURNING *`,
+      [newAmount, newDirection, newAccountId, category_id ?? tx.category_id, note ?? null, newBalance, id]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  } finally {
+    client.release();
+  }
+});
+
 app.post('/transactions/:id/confirm', async (req, res) => {
   const { id } = req.params;
   const { category_id, note } = req.body || {};
@@ -340,25 +386,54 @@ app.get('/investments', async (req, res) => {
 });
 
 app.post('/investments', async (req, res) => {
-  const { title, invested_amount_rial, current_value_rial, note } = req.body || {};
-  if (!title || !invested_amount_rial) return res.status(400).json({ error: 'missing required fields' });
+  const {
+    title, asset_type, quantity, purchase_unit_price_rial,
+    invested_amount_rial, current_value_rial, note,
+  } = req.body || {};
+  if (!title) return res.status(400).json({ error: 'title is required' });
+
+  // If quantity + unit price are given (gold/coin/dollar), derive the totals from them.
+  const computedInvested = (quantity != null && purchase_unit_price_rial != null)
+    ? Math.round(Number(quantity) * Number(purchase_unit_price_rial))
+    : invested_amount_rial;
+  if (!computedInvested) return res.status(400).json({ error: 'invested_amount_rial or quantity+purchase_unit_price_rial required' });
+
   const result = await pool.query(
-    `INSERT INTO investments (title, invested_amount_rial, current_value_rial, note)
-     VALUES ($1, $2, $3, $4) RETURNING *`,
-    [title, invested_amount_rial, current_value_rial ?? invested_amount_rial, note || null]
+    `INSERT INTO investments (title, asset_type, quantity, purchase_unit_price_rial, current_unit_price_rial, invested_amount_rial, current_value_rial, note)
+     VALUES ($1, $2, $3, $4, $4, $5, $6, $7) RETURNING *`,
+    [
+      title, asset_type || 'other', quantity ?? null, purchase_unit_price_rial ?? null,
+      computedInvested, current_value_rial ?? computedInvested, note || null,
+    ]
   );
   res.json(result.rows[0]);
 });
 
 app.put('/investments/:id', async (req, res) => {
   const { id } = req.params;
-  const { current_value_rial, note } = req.body || {};
-  const result = await pool.query(
-    `UPDATE investments SET current_value_rial = COALESCE($1, current_value_rial), note = COALESCE($2, note), updated_at = now() WHERE id = $3 RETURNING *`,
-    [current_value_rial ?? null, note ?? null, id]
-  );
-  if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
-  res.json(result.rows[0]);
+  const { current_value_rial, current_unit_price_rial, note } = req.body || {};
+  const client = await pool.connect();
+  try {
+    let resolvedCurrentValue = current_value_rial;
+    if (current_unit_price_rial != null) {
+      const invRes = await client.query('SELECT quantity FROM investments WHERE id = $1', [id]);
+      const quantity = invRes.rows[0]?.quantity;
+      if (quantity != null) resolvedCurrentValue = Math.round(Number(quantity) * Number(current_unit_price_rial));
+    }
+    const result = await client.query(
+      `UPDATE investments SET
+         current_value_rial = COALESCE($1, current_value_rial),
+         current_unit_price_rial = COALESCE($2, current_unit_price_rial),
+         note = COALESCE($3, note),
+         updated_at = now()
+       WHERE id = $4 RETURNING *`,
+      [resolvedCurrentValue ?? null, current_unit_price_rial ?? null, note ?? null, id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
+    res.json(result.rows[0]);
+  } finally {
+    client.release();
+  }
 });
 
 app.get('/health', (req, res) => res.json({ ok: true }));

@@ -130,11 +130,13 @@ async function renderOverview() {
     const d = new Date(t.created_at);
     return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && t.status === 'confirmed';
   });
-  const monthExpense = thisMonthTx.filter((t) => t.direction === 'expense').reduce((s, t) => s + Number(t.amount_rial), 0);
-  const monthIncome = thisMonthTx.filter((t) => t.direction === 'income').reduce((s, t) => s + Number(t.amount_rial), 0);
+  // Transfers between own accounts are neither real income nor real expense.
+  const realFlowTx = thisMonthTx.filter((t) => t.category_name !== TRANSFER_CATEGORY_NAME);
+  const monthExpense = realFlowTx.filter((t) => t.direction === 'expense').reduce((s, t) => s + Number(t.amount_rial), 0);
+  const monthIncome = realFlowTx.filter((t) => t.direction === 'income').reduce((s, t) => s + Number(t.amount_rial), 0);
 
   const expenseByCategory = {};
-  thisMonthTx.filter((t) => t.direction === 'expense' && t.category_id).forEach((t) => {
+  realFlowTx.filter((t) => t.direction === 'expense' && t.category_id).forEach((t) => {
     const cat = categories.find((c) => c.id === t.category_id);
     const name = cat ? cat.name : 'سایر';
     expenseByCategory[name] = (expenseByCategory[name] || 0) + Math.round(Number(t.amount_rial) / 10);
@@ -258,7 +260,10 @@ async function renderTransactions() {
           </span>
           <span class="muted">${new Date(t.created_at).toLocaleString('fa-IR')}</span>
         </div>
-        <div class="muted">${t.account_name} · ${t.category_name || 'بدون دسته'}${t.note ? ' · ' + t.note : ''}</div>
+        <div class="row">
+          <div class="muted">${t.account_name} · ${t.category_name || 'بدون دسته'}${t.note ? ' · ' + t.note : ''}</div>
+          <button class="action secondary" data-edit-tx="${t.id}" style="width:auto;padding:4px 10px;margin:0">✎</button>
+        </div>
       </div>
     `).join('')}
     <div class="row" style="margin-top:12px">
@@ -270,6 +275,57 @@ async function renderTransactions() {
 
   document.getElementById('tx-prev').addEventListener('click', () => { txPage--; renderTransactions(); });
   document.getElementById('tx-next').addEventListener('click', () => { txPage++; renderTransactions(); });
+  document.querySelectorAll('[data-edit-tx]').forEach((b) => {
+    b.addEventListener('click', () => openEditTxModal(txs.find((t) => t.id === Number(b.dataset.editTx))));
+  });
+}
+
+async function openEditTxModal(t) {
+  const [accounts, cats] = await Promise.all([api('/accounts'), api('/categories')]);
+  const renderCatOptions = (direction) => cats
+    .filter((c) => c.direction === direction)
+    .map((c) => `<option value="${c.id}" ${c.id === t.category_id ? 'selected' : ''}>${c.name}</option>`)
+    .join('');
+  const accountOptions = accounts
+    .map((a) => `<option value="${a.id}" ${a.id === t.account_id ? 'selected' : ''}>${a.display_name}</option>`)
+    .join('');
+
+  manualModal.innerHTML = `
+    <div class="card">
+      <strong>ویرایش تراکنش</strong>
+      <select id="e-account">${accountOptions}</select>
+      <select id="e-direction">
+        <option value="expense" ${t.direction === 'expense' ? 'selected' : ''}>کسر از حساب</option>
+        <option value="income" ${t.direction === 'income' ? 'selected' : ''}>واریز به حساب</option>
+      </select>
+      <input id="e-amount" type="text" inputmode="numeric" value="${toman(t.amount_rial)}" />
+      <select id="e-category">${renderCatOptions(t.direction)}</select>
+      <input id="e-note" placeholder="توضیح" value="${t.note || ''}" />
+      <button class="action" id="e-save">ذخیره</button>
+      <button class="action secondary" id="e-cancel">انصراف</button>
+    </div>
+  `;
+  manualModal.hidden = false;
+  wireThousandsInput('e-amount');
+
+  document.getElementById('e-direction').addEventListener('change', (e) => {
+    document.getElementById('e-category').innerHTML = renderCatOptions(e.target.value);
+  });
+  document.getElementById('e-cancel').addEventListener('click', () => { manualModal.hidden = true; });
+  document.getElementById('e-save').addEventListener('click', async () => {
+    await api(`/transactions/${t.id}/edit`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        account_id: document.getElementById('e-account').value,
+        direction: document.getElementById('e-direction').value,
+        amount_rial: numFromInput('e-amount') * 10,
+        category_id: document.getElementById('e-category').value || null,
+        note: document.getElementById('e-note').value || null,
+      }),
+    });
+    manualModal.hidden = true;
+    renderTransactions();
+  });
 }
 
 function txCard(t, cats, editable, accounts) {
@@ -467,41 +523,90 @@ async function renderInvestments() {
     </div>
     <div class="card">
       <strong>افزودن سرمایه‌گذاری</strong>
-      <input id="v-title" placeholder="عنوان (مثلا: طلا)" />
-      <input id="v-amount" type="text" inputmode="numeric" placeholder="مبلغ سرمایه‌گذاری‌شده (تومان)" />
+      <input id="v-title" placeholder="عنوان (مثلا: طلای 18 عیار)" />
+      <select id="v-type">
+        <option value="gold">طلا (بر اساس گرم)</option>
+        <option value="coin">سکه (بر اساس تعداد)</option>
+        <option value="dollar">دلار (بر اساس تعداد)</option>
+        <option value="other">سایر (مبلغ کلی)</option>
+      </select>
+      <div id="v-qty-fields">
+        <input id="v-qty" type="text" inputmode="decimal" placeholder="مقدار (مثلا 0.98 گرم)" />
+        <input id="v-unit-price" type="text" inputmode="numeric" placeholder="قیمت هر واحد هنگام خرید (تومان)" />
+      </div>
+      <input id="v-amount" type="text" inputmode="numeric" placeholder="مبلغ کل سرمایه‌گذاری‌شده (تومان)" hidden />
       <button class="action" id="v-add">افزودن</button>
     </div>
   ` + (items.length === 0 ? '<p class="muted">سرمایه‌گذاری ثبت نشده.</p>' : items.map((v) => {
     const gainPercent = v.invested_amount_rial > 0
       ? Math.round(((v.current_value_rial - v.invested_amount_rial) / v.invested_amount_rial) * 100)
       : 0;
+    const unitLabel = { gold: 'گرم', coin: 'عدد', dollar: 'دلار' }[v.asset_type] || null;
     return `
     <div class="card">
       <div class="row">
         <strong>${v.title}</strong>
         <span class="badge ${gainPercent >= 0 ? 'gain' : 'loss'}">${gainPercent >= 0 ? '+' : ''}${gainPercent}%</span>
       </div>
-      <div class="muted">مبلغ اولیه: ${toman(v.invested_amount_rial)} تومان</div>
-      <div class="grid2">
-        <input id="v-cur-${v.id}" type="text" inputmode="numeric" placeholder="ارزش فعلی (تومان)" value="${toman(v.current_value_rial)}" />
-        <button class="action secondary" data-update="${v.id}">به‌روزرسانی</button>
-      </div>
+      ${unitLabel ? `<div class="muted font-num">${v.quantity} ${unitLabel} · خرید هر واحد: ${toman(v.purchase_unit_price_rial)} تومان</div>` : ''}
+      <div class="muted privacy-target font-num">مبلغ اولیه: ${toman(v.invested_amount_rial)} تومان</div>
+      ${unitLabel ? `
+        <div class="grid2">
+          <input id="v-cur-price-${v.id}" type="text" inputmode="numeric" placeholder="قیمت فعلی هر واحد (تومان)" value="${toman(v.current_unit_price_rial || v.purchase_unit_price_rial)}" />
+          <button class="action secondary" data-update-price="${v.id}">به‌روزرسانی قیمت</button>
+        </div>
+      ` : `
+        <div class="grid2">
+          <input id="v-cur-${v.id}" type="text" inputmode="numeric" placeholder="ارزش فعلی (تومان)" value="${toman(v.current_value_rial)}" />
+          <button class="action secondary" data-update="${v.id}">به‌روزرسانی</button>
+        </div>
+      `}
     </div>
   `;
   }).join(''));
 
   wireThousandsInput('v-amount');
-  items.forEach((v) => wireThousandsInput(`v-cur-${v.id}`));
+  wireThousandsInput('v-unit-price');
+  items.forEach((v) => {
+    wireThousandsInput(`v-cur-${v.id}`);
+    wireThousandsInput(`v-cur-price-${v.id}`);
+  });
+
+  const vType = document.getElementById('v-type');
+  const vQtyFields = document.getElementById('v-qty-fields');
+  const vAmount = document.getElementById('v-amount');
+  vType.addEventListener('change', () => {
+    const isOther = vType.value === 'other';
+    vQtyFields.hidden = isOther;
+    vAmount.hidden = !isOther;
+  });
 
   document.getElementById('v-add').addEventListener('click', async () => {
     const title = document.getElementById('v-title').value;
-    const amountToman = numFromInput('v-amount');
-    if (!title || !amountToman) return;
-    await api('/investments', {
-      method: 'POST',
-      body: JSON.stringify({ title, invested_amount_rial: amountToman * 10 }),
-    });
+    const asset_type = vType.value;
+    if (!title) return;
+    let body;
+    if (asset_type === 'other') {
+      const amountToman = numFromInput('v-amount');
+      if (!amountToman) return;
+      body = { title, asset_type, invested_amount_rial: amountToman * 10 };
+    } else {
+      const quantity = Number(document.getElementById('v-qty').value);
+      const unitPriceToman = numFromInput('v-unit-price');
+      if (!quantity || !unitPriceToman) return;
+      body = { title, asset_type, quantity, purchase_unit_price_rial: unitPriceToman * 10 };
+    }
+    await api('/investments', { method: 'POST', body: JSON.stringify(body) });
     renderInvestments();
+  });
+
+  document.querySelectorAll('[data-update-price]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const id = b.dataset.updatePrice;
+      const current_unit_price_rial = numFromInput(`v-cur-price-${id}`) * 10;
+      await api(`/investments/${id}`, { method: 'PUT', body: JSON.stringify({ current_unit_price_rial }) });
+      renderInvestments();
+    });
   });
 
   document.querySelectorAll('[data-update]').forEach((b) => {
