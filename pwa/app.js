@@ -203,7 +203,7 @@ async function renderOverview() {
       <div class="accounts-grid" style="margin-top:10px">
         ${accounts.map((a) => `
           <div class="mini-bank-card" style="background:${bankTheme(a.bank_code)}">
-            <div class="mini-bank-icon"></div>
+            ${bankLogoHtml(a.bank_code, 32) || '<div class="mini-bank-icon"></div>'}
             <div style="font-size:.85rem;font-weight:600">${a.display_name}</div>
             <div class="muted font-num" style="font-size:.7rem;margin-top:2px">•••• •••• ••••</div>
             <div class="privacy-target font-num" style="margin-top:8px;font-weight:700">${toman(a.balance_rial)} تومان</div>
@@ -438,6 +438,16 @@ function bankTheme(bankCode) {
   return BANK_THEMES[bankCode] || 'linear-gradient(135deg, #1e293b, #0f172a)';
 }
 
+const BANK_LOGOS = {
+  blu: 'https://www.google.com/s2/favicons?sz=128&domain=blubank.com',
+  pasargad: 'https://www.google.com/s2/favicons?sz=128&domain=bpi.ir',
+};
+function bankLogoHtml(bankCode, size) {
+  const url = BANK_LOGOS[bankCode];
+  if (!url) return '';
+  return `<img src="${url}" alt="" style="width:${size}px;height:${size}px;border-radius:8px;background:white;padding:3px;object-fit:contain" onerror="this.remove()" />`;
+}
+
 function copyableField(label, value) {
   if (!value) return '';
   return `
@@ -460,7 +470,7 @@ async function renderAccounts() {
   ` + accounts.map((a) => `
     <div class="bank-card" style="margin:10px 0;background:${bankTheme(a.bank_code)}">
       <div class="row">
-        <span>${a.display_name}</span>
+        <div class="row" style="width:auto;gap:8px">${bankLogoHtml(a.bank_code, 28)}<span>${a.display_name}</span></div>
         <button data-edit-acc="${a.id}" style="background:rgba(255,255,255,.15);border:none;color:white;border-radius:8px;padding:4px 8px;font-family:inherit;font-size:.7rem;cursor:pointer">✎ ویرایش</button>
       </div>
       ${copyableField('شماره کارت', a.card_number)}

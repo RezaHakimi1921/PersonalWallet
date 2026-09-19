@@ -4,6 +4,7 @@
 	}
 	handle {
 		root * /srv/pwa
+		header Cache-Control "no-cache, must-revalidate"
 		file_server
 		try_files {path} /index.html
 	}
