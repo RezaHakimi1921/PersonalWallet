@@ -81,6 +81,8 @@ async function render(tab) {
     if (tab === 'installments') return renderInstallments();
     if (tab === 'investments') return renderInvestments();
     if (tab === 'categories') return renderCategories();
+    if (tab === 'debts') return renderDebts();
+    if (tab === 'trash') return renderTrash();
   } catch (e) {
     content.innerHTML = '<p class="muted">خطا در بارگذاری اطلاعات</p>';
   } finally {
@@ -593,12 +595,14 @@ function openAccountModal(account) {
         <input id="acc-cvv2" placeholder="CVV2 (اختیاری)" value="${account?.cvv2 || ''}" />
         <input id="acc-expiry" placeholder="انقضا MM/YY (اختیاری)" inputmode="numeric" value="${account?.expiry || ''}" />
       </div>
+      <input id="acc-threshold" type="text" inputmode="numeric" placeholder="هشدار وقتی موجودی کمتر از این شد (تومان، اختیاری)" value="${account?.low_balance_threshold_rial ? toman(account.low_balance_threshold_rial) : ''}" />
       <button class="action" id="acc-save">${isNew ? 'افزودن' : 'ذخیره'}</button>
       <button class="action secondary" id="acc-cancel">انصراف</button>
     </div>
   `;
   manualModal.hidden = false;
   wireThousandsInput('acc-balance');
+  wireThousandsInput('acc-threshold');
   wireExpiryInput('acc-expiry');
 
   document.getElementById('acc-cancel').addEventListener('click', () => { manualModal.hidden = true; });
@@ -613,6 +617,7 @@ function openAccountModal(account) {
       iban: document.getElementById('acc-iban').value || null,
       cvv2: document.getElementById('acc-cvv2').value || null,
       expiry: document.getElementById('acc-expiry').value || null,
+      low_balance_threshold_rial: numFromInput('acc-threshold') ? numFromInput('acc-threshold') * 10 : null,
     };
     if (isNew) {
       await api('/accounts', { method: 'POST', body: JSON.stringify(body) });
@@ -883,6 +888,110 @@ async function renderCategories() {
       if (!newName) return;
       await api(`/categories/${b.dataset.edit}`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
       renderCategories();
+    });
+  });
+}
+
+async function renderDebts() {
+  const debts = await api('/debts');
+  const iOwe = debts.filter((d) => d.type === 'i_owe');
+  const owedToMe = debts.filter((d) => d.type === 'owed_to_me');
+
+  const debtCard = (d) => `
+    <div class="card">
+      <div class="row">
+        <strong>${d.person_name}</strong>
+        <span class="badge ${d.status === 'settled' ? 'completed' : 'active'}">${d.status === 'settled' ? 'تسویه‌شده' : 'باز'}</span>
+      </div>
+      <div class="privacy-target font-num" style="margin-top:6px;font-size:1.1rem;font-weight:700">${toman(d.amount_rial)} تومان</div>
+      ${d.due_date ? `<div class="muted font-num" style="margin-top:4px">سررسید: ${new Date(d.due_date).toLocaleDateString('fa-IR')}</div>` : ''}
+      ${d.note ? `<div class="muted" style="margin-top:4px">${d.note}</div>` : ''}
+      <div class="row" style="gap:8px;margin-top:10px">
+        ${d.status === 'open' ? `<button class="action" data-settle="${d.id}" style="flex:1">✅ تسویه شد</button>` : ''}
+        <button class="action danger" data-delete-debt="${d.id}" style="width:auto">🗑</button>
+      </div>
+    </div>
+  `;
+
+  content.innerHTML = `
+    <div class="card">
+      <strong>ثبت بدهی/طلب جدید</strong>
+      <select id="d-type">
+        <option value="i_owe">من بدهکارم (باید بدم)</option>
+        <option value="owed_to_me">طلب دارم (باید بگیرم)</option>
+      </select>
+      <input id="d-person" placeholder="نام شخص" />
+      <input id="d-amount" type="text" inputmode="numeric" placeholder="مبلغ (تومان)" />
+      <input id="d-due" type="date" placeholder="سررسید (اختیاری)" />
+      <input id="d-note" placeholder="توضیح (اختیاری)" />
+      <button class="action" id="d-add">ثبت</button>
+    </div>
+    <strong style="color:var(--red)">بدهی‌های من (${iOwe.length})</strong>
+    ${iOwe.length ? iOwe.map(debtCard).join('') : '<p class="muted">چیزی ثبت نشده.</p>'}
+    <strong style="color:var(--green);margin-top:10px;display:block">طلب‌های من (${owedToMe.length})</strong>
+    ${owedToMe.length ? owedToMe.map(debtCard).join('') : '<p class="muted">چیزی ثبت نشده.</p>'}
+  `;
+
+  wireThousandsInput('d-amount');
+
+  document.getElementById('d-add').addEventListener('click', async () => {
+    const person_name = document.getElementById('d-person').value;
+    const amountToman = numFromInput('d-amount');
+    if (!person_name || !amountToman) return;
+    await api('/debts', {
+      method: 'POST',
+      body: JSON.stringify({
+        type: document.getElementById('d-type').value,
+        person_name,
+        amount_rial: amountToman * 10,
+        due_date: document.getElementById('d-due').value || null,
+        note: document.getElementById('d-note').value || null,
+      }),
+    });
+    renderDebts();
+  });
+
+  document.querySelectorAll('[data-settle]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      await api(`/debts/${b.dataset.settle}`, { method: 'PUT', body: JSON.stringify({ status: 'settled' }) });
+      renderDebts();
+    });
+  });
+  document.querySelectorAll('[data-delete-debt]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      if (!confirm('حذف شود؟ (قابل بازیابی از سطل بازیابی)')) return;
+      await api(`/debts/${b.dataset.deleteDebt}`, { method: 'DELETE' });
+      renderDebts();
+    });
+  });
+}
+
+async function renderTrash() {
+  const [txs, installments, debts] = await Promise.all([
+    api('/transactions/trash'), api('/installments/trash'), api('/debts/trash'),
+  ]);
+
+  const section = (title, items, restoreFn) => `
+    <strong>${title} (${items.length})</strong>
+    ${items.length === 0 ? '<p class="muted">چیزی توی سطل نیست.</p>' : items.map((item) => `
+      <div class="card row">
+        <span>${item.title || item.person_name || (item.amount_rial ? toman(item.amount_rial) + ' تومان' : 'مورد حذف‌شده')}</span>
+        <button class="action secondary" data-restore="${item.id}" data-restore-fn="${restoreFn}" style="width:auto">↩️ بازیابی</button>
+      </div>
+    `).join('')}
+  `;
+
+  content.innerHTML = `
+    <p class="muted">موارد حذف‌شده اینجان و قابل بازگردوندنن.</p>
+    ${section('تراکنش‌های حذف‌شده', txs, 'transactions')}
+    ${section('اقساط حذف‌شده', installments, 'installments')}
+    ${section('بدهی/طلب حذف‌شده', debts, 'debts')}
+  `;
+
+  document.querySelectorAll('[data-restore]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      await api(`/${b.dataset.restoreFn}/${b.dataset.restore}/restore`, { method: 'POST' });
+      renderTrash();
     });
   });
 }

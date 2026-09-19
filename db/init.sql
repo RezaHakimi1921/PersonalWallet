@@ -8,6 +8,7 @@ CREATE TABLE accounts (
   iban TEXT,
   cvv2 TEXT,
   expiry TEXT,
+  low_balance_threshold_rial BIGINT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -31,7 +32,20 @@ CREATE TABLE installments (
   due_day_of_month INT NOT NULL CHECK (due_day_of_month BETWEEN 1 AND 31),
   status TEXT NOT NULL CHECK (status IN ('active','completed')) DEFAULT 'active',
   note TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at TIMESTAMPTZ
+);
+
+CREATE TABLE debts (
+  id SERIAL PRIMARY KEY,
+  type TEXT NOT NULL CHECK (type IN ('i_owe','owed_to_me')),
+  person_name TEXT NOT NULL,
+  amount_rial BIGINT NOT NULL,
+  due_date DATE,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','settled')),
+  note TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at TIMESTAMPTZ
 );
 
 CREATE TABLE investments (
@@ -60,7 +74,8 @@ CREATE TABLE transactions (
   category_id INT REFERENCES categories(id),
   note TEXT,
   installment_id INT REFERENCES installments(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at TIMESTAMPTZ
 );
 
 INSERT INTO accounts (bank_code, display_name, balance_rial) VALUES
