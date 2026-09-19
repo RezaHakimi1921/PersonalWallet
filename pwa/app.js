@@ -51,7 +51,8 @@ function applyPrivacyMode(on) {
   // instantly to any content rendered later too — no re-query/flash on tab switch.
   document.body.classList.toggle('privacy-on', on);
   btnPrivacy.classList.toggle('active', on);
-  btnPrivacy.textContent = on ? '🙈 نمایش ارقام' : '👁 محو کردن ارقام';
+  btnPrivacy.textContent = on ? '🙈' : '🐵';
+  btnPrivacy.title = on ? 'نمایش ارقام' : 'محو کردن ارقام';
 }
 btnPrivacy.addEventListener('click', () => {
   const on = !btnPrivacy.classList.contains('active');
@@ -480,7 +481,7 @@ async function renderInstallments() {
           <strong class="font-num privacy-target" style="color:var(--red)">${toman(remaining)} تومان</strong>
         </div>
         <div class="row" style="gap:8px">
-          <button class="action pay" data-pay="${i.id}" style="flex:1">ثبت پرداخت دستی</button>
+          <button class="action" data-pay="${i.id}" style="flex:1">ثبت پرداخت دستی</button>
           <button class="action secondary" data-edit-inst="${i.id}" style="width:auto">✎</button>
           <button class="action danger" data-delete-inst="${i.id}" style="width:auto">🗑</button>
         </div>
