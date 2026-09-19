@@ -205,7 +205,7 @@ async function renderOverview() {
           <div class="mini-bank-card" style="background:${bankTheme(a.bank_code)}">
             ${bankLogoHtml(a.bank_code, 32) || '<div class="mini-bank-icon"></div>'}
             <div style="font-size:.85rem;font-weight:600">${a.display_name}</div>
-            <div class="muted font-num" style="font-size:.7rem;margin-top:2px">•••• •••• ••••</div>
+            ${cardInfoHtml(a)}
             <div class="privacy-target font-num" style="margin-top:8px;font-weight:700">${toman(a.balance_rial)} تومان</div>
           </div>
         `).join('')}
@@ -250,6 +250,7 @@ async function renderOverview() {
 
   content.innerHTML = html;
   document.getElementById('header-networth').textContent = toman(netWorth);
+  wireCopyFields();
   const gotoBtn = document.getElementById('goto-pending');
   if (gotoBtn) gotoBtn.addEventListener('click', () => setActiveTab('pending'));
   document.getElementById('goto-accounts')?.addEventListener('click', () => setActiveTab('accounts'));
@@ -453,9 +454,47 @@ function copyableField(label, value) {
   return `
     <div class="row card-field" data-copy="${value}" style="margin-top:8px;cursor:pointer">
       <span style="font-size:.7rem;opacity:.8">${label}</span>
-      <span class="font-num" style="font-size:.8rem;letter-spacing:1px">${value} 📋</span>
+      <span class="font-num copy-value" style="font-size:.8rem;letter-spacing:1px">${value} 📋</span>
     </div>
   `;
+}
+
+function cardInfoHtml(a) {
+  return `
+    ${copyableField('شماره کارت', a.card_number)}
+    ${copyableField('شماره حساب', a.account_number)}
+    ${copyableField('شبا', a.iban ? 'IR' + a.iban : null)}
+    <div class="row" style="margin-top:8px">
+      ${a.expiry ? `<span style="font-size:.7rem;opacity:.8">انقضا: <span class="font-num">${a.expiry}</span></span>` : '<span></span>'}
+      ${a.cvv2 ? `<span style="font-size:.7rem;opacity:.8">CVV2: <span class="font-num privacy-target">${a.cvv2}</span></span>` : ''}
+    </div>
+  `;
+}
+
+function wireCopyFields() {
+  document.querySelectorAll('[data-copy]').forEach((el) => {
+    el.addEventListener('click', async () => {
+      const valueEl = el.querySelector('.copy-value');
+      const original = valueEl.textContent;
+      try {
+        await navigator.clipboard.writeText(el.dataset.copy);
+        valueEl.textContent = 'کپی شد ✅';
+        setTimeout(() => { valueEl.textContent = original; }, 1200);
+      } catch (e) {
+        valueEl.textContent = 'کپی ناموفق بود';
+        setTimeout(() => { valueEl.textContent = original; }, 1200);
+      }
+    });
+  });
+}
+
+// Auto-format expiry as MM/YY while typing (two digits, slash, two digits).
+function wireExpiryInput(id) {
+  const el = document.getElementById(id);
+  el.addEventListener('input', () => {
+    const digits = el.value.replace(/\D/g, '').slice(0, 4);
+    el.value = digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits;
+  });
 }
 
 async function renderAccounts() {
@@ -473,12 +512,7 @@ async function renderAccounts() {
         <div class="row" style="width:auto;gap:8px">${bankLogoHtml(a.bank_code, 28)}<span>${a.display_name}</span></div>
         <button data-edit-acc="${a.id}" style="background:rgba(255,255,255,.15);border:none;color:white;border-radius:8px;padding:4px 8px;font-family:inherit;font-size:.7rem;cursor:pointer">✎ ویرایش</button>
       </div>
-      ${copyableField('شماره کارت', a.card_number)}
-      ${copyableField('شبا', a.iban ? 'IR' + a.iban : null)}
-      <div class="row" style="margin-top:8px">
-        ${a.expiry ? `<span style="font-size:.7rem;opacity:.8">انقضا: <span class="font-num">${a.expiry}</span></span>` : '<span></span>'}
-        ${a.cvv2 ? `<span style="font-size:.7rem;opacity:.8">CVV2: <span class="font-num privacy-target">${a.cvv2}</span></span>` : ''}
-      </div>
+      ${cardInfoHtml(a)}
       <div class="row" style="margin-top:12px">
         <span class="muted" style="font-size:.75rem">موجودی</span>
         <strong class="privacy-target font-num">${toman(a.balance_rial)} تومان</strong>
@@ -486,15 +520,7 @@ async function renderAccounts() {
     </div>
   `).join('');
 
-  document.querySelectorAll('[data-copy]').forEach((el) => {
-    el.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(el.dataset.copy);
-        el.style.opacity = '.6';
-        setTimeout(() => { el.style.opacity = '1'; }, 300);
-      } catch (e) { /* clipboard unavailable */ }
-    });
-  });
+  wireCopyFields();
 
   document.getElementById('acc-new').addEventListener('click', () => openAccountModal(null));
   document.querySelectorAll('[data-edit-acc]').forEach((b) => {
@@ -513,10 +539,11 @@ function openAccountModal(account) {
       <input id="acc-name" placeholder="نام بانک/حساب" value="${account?.display_name || ''}" />
       <input id="acc-balance" type="text" inputmode="numeric" placeholder="موجودی (تومان)" value="${account ? toman(account.balance_rial) : ''}" />
       <input id="acc-card" placeholder="شماره کارت (اختیاری)" value="${account?.card_number || ''}" />
+      <input id="acc-account-number" placeholder="شماره حساب (اختیاری)" value="${account?.account_number || ''}" />
       <input id="acc-iban" placeholder="شبا بدون IR (اختیاری)" value="${account?.iban || ''}" />
       <div class="grid2">
         <input id="acc-cvv2" placeholder="CVV2 (اختیاری)" value="${account?.cvv2 || ''}" />
-        <input id="acc-expiry" placeholder="انقضا (اختیاری)" value="${account?.expiry || ''}" />
+        <input id="acc-expiry" placeholder="انقضا MM/YY (اختیاری)" inputmode="numeric" value="${account?.expiry || ''}" />
       </div>
       <button class="action" id="acc-save">${isNew ? 'افزودن' : 'ذخیره'}</button>
       <button class="action secondary" id="acc-cancel">انصراف</button>
@@ -524,6 +551,7 @@ function openAccountModal(account) {
   `;
   manualModal.hidden = false;
   wireThousandsInput('acc-balance');
+  wireExpiryInput('acc-expiry');
 
   document.getElementById('acc-cancel').addEventListener('click', () => { manualModal.hidden = true; });
   document.getElementById('acc-save').addEventListener('click', async () => {
@@ -533,6 +561,7 @@ function openAccountModal(account) {
       display_name,
       balance_rial: numFromInput('acc-balance') * 10,
       card_number: document.getElementById('acc-card').value || null,
+      account_number: document.getElementById('acc-account-number').value || null,
       iban: document.getElementById('acc-iban').value || null,
       cvv2: document.getElementById('acc-cvv2').value || null,
       expiry: document.getElementById('acc-expiry').value || null,

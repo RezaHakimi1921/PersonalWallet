@@ -4,6 +4,7 @@ CREATE TABLE accounts (
   display_name TEXT NOT NULL,
   balance_rial BIGINT NOT NULL DEFAULT 0,
   card_number TEXT,
+  account_number TEXT,
   iban TEXT,
   cvv2 TEXT,
   expiry TEXT,
