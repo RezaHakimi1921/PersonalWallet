@@ -202,7 +202,7 @@ async function renderOverview() {
       </div>
       <div class="accounts-grid" style="margin-top:10px">
         ${accounts.map((a) => `
-          <div class="mini-bank-card">
+          <div class="mini-bank-card" style="background:${bankTheme(a.bank_code)}">
             <div class="mini-bank-icon"></div>
             <div style="font-size:.85rem;font-weight:600">${a.display_name}</div>
             <div class="muted font-num" style="font-size:.7rem;margin-top:2px">•••• •••• ••••</div>
@@ -429,6 +429,25 @@ function wireTxCard(t, cats, accounts) {
   });
 }
 
+const BANK_THEMES = {
+  resalat: 'linear-gradient(135deg, #0a7d3f, #054023)',
+  blu: 'linear-gradient(135deg, #0ea5a6, #0a4f50)',
+  pasargad: 'linear-gradient(135deg, #00573f, #7a5c00)',
+};
+function bankTheme(bankCode) {
+  return BANK_THEMES[bankCode] || 'linear-gradient(135deg, #1e293b, #0f172a)';
+}
+
+function copyableField(label, value) {
+  if (!value) return '';
+  return `
+    <div class="row card-field" data-copy="${value}" style="margin-top:8px;cursor:pointer">
+      <span style="font-size:.7rem;opacity:.8">${label}</span>
+      <span class="font-num" style="font-size:.8rem;letter-spacing:1px">${value} 📋</span>
+    </div>
+  `;
+}
+
 async function renderAccounts() {
   const accounts = await api('/accounts');
   const total = accounts.reduce((s, a) => s + Number(a.balance_rial), 0);
@@ -437,16 +456,85 @@ async function renderAccounts() {
       <span class="muted">مجموع موجودی</span>
       <strong class="privacy-target font-num" style="color:var(--green)">${toman(total)} تومان</strong>
     </div>
+    <button class="action" id="acc-new">+ حساب جدید</button>
   ` + accounts.map((a) => `
-    <div class="bank-card" style="margin-bottom:10px">
-      <div class="row"><span>${a.display_name}</span><span class="muted">🏦</span></div>
-      <div class="num font-num">•••• •••• ••••</div>
+    <div class="bank-card" style="margin:10px 0;background:${bankTheme(a.bank_code)}">
+      <div class="row">
+        <span>${a.display_name}</span>
+        <button data-edit-acc="${a.id}" style="background:rgba(255,255,255,.15);border:none;color:white;border-radius:8px;padding:4px 8px;font-family:inherit;font-size:.7rem;cursor:pointer">✎ ویرایش</button>
+      </div>
+      ${copyableField('شماره کارت', a.card_number)}
+      ${copyableField('شبا', a.iban ? 'IR' + a.iban : null)}
+      <div class="row" style="margin-top:8px">
+        ${a.expiry ? `<span style="font-size:.7rem;opacity:.8">انقضا: <span class="font-num">${a.expiry}</span></span>` : '<span></span>'}
+        ${a.cvv2 ? `<span style="font-size:.7rem;opacity:.8">CVV2: <span class="font-num privacy-target">${a.cvv2}</span></span>` : ''}
+      </div>
       <div class="row" style="margin-top:12px">
         <span class="muted" style="font-size:.75rem">موجودی</span>
         <strong class="privacy-target font-num">${toman(a.balance_rial)} تومان</strong>
       </div>
     </div>
   `).join('');
+
+  document.querySelectorAll('[data-copy]').forEach((el) => {
+    el.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(el.dataset.copy);
+        el.style.opacity = '.6';
+        setTimeout(() => { el.style.opacity = '1'; }, 300);
+      } catch (e) { /* clipboard unavailable */ }
+    });
+  });
+
+  document.getElementById('acc-new').addEventListener('click', () => openAccountModal(null));
+  document.querySelectorAll('[data-edit-acc]').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openAccountModal(accounts.find((a) => a.id === Number(b.dataset.editAcc)));
+    });
+  });
+}
+
+function openAccountModal(account) {
+  const isNew = !account;
+  manualModal.innerHTML = `
+    <div class="card">
+      <strong>${isNew ? 'حساب بانکی جدید' : 'ویرایش حساب'}</strong>
+      <input id="acc-name" placeholder="نام بانک/حساب" value="${account?.display_name || ''}" />
+      <input id="acc-balance" type="text" inputmode="numeric" placeholder="موجودی (تومان)" value="${account ? toman(account.balance_rial) : ''}" />
+      <input id="acc-card" placeholder="شماره کارت (اختیاری)" value="${account?.card_number || ''}" />
+      <input id="acc-iban" placeholder="شبا بدون IR (اختیاری)" value="${account?.iban || ''}" />
+      <div class="grid2">
+        <input id="acc-cvv2" placeholder="CVV2 (اختیاری)" value="${account?.cvv2 || ''}" />
+        <input id="acc-expiry" placeholder="انقضا (اختیاری)" value="${account?.expiry || ''}" />
+      </div>
+      <button class="action" id="acc-save">${isNew ? 'افزودن' : 'ذخیره'}</button>
+      <button class="action secondary" id="acc-cancel">انصراف</button>
+    </div>
+  `;
+  manualModal.hidden = false;
+  wireThousandsInput('acc-balance');
+
+  document.getElementById('acc-cancel').addEventListener('click', () => { manualModal.hidden = true; });
+  document.getElementById('acc-save').addEventListener('click', async () => {
+    const display_name = document.getElementById('acc-name').value;
+    if (!display_name) return;
+    const body = {
+      display_name,
+      balance_rial: numFromInput('acc-balance') * 10,
+      card_number: document.getElementById('acc-card').value || null,
+      iban: document.getElementById('acc-iban').value || null,
+      cvv2: document.getElementById('acc-cvv2').value || null,
+      expiry: document.getElementById('acc-expiry').value || null,
+    };
+    if (isNew) {
+      await api('/accounts', { method: 'POST', body: JSON.stringify(body) });
+    } else {
+      await api(`/accounts/${account.id}`, { method: 'PUT', body: JSON.stringify(body) });
+    }
+    manualModal.hidden = true;
+    renderAccounts();
+  });
 }
 
 async function renderInstallments() {

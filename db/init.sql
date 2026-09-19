@@ -3,6 +3,10 @@ CREATE TABLE accounts (
   bank_code TEXT UNIQUE NOT NULL,
   display_name TEXT NOT NULL,
   balance_rial BIGINT NOT NULL DEFAULT 0,
+  card_number TEXT,
+  iban TEXT,
+  cvv2 TEXT,
+  expiry TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

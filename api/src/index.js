@@ -297,6 +297,36 @@ app.get('/accounts', async (req, res) => {
   res.json(result.rows);
 });
 
+app.post('/accounts', async (req, res) => {
+  const { display_name, balance_rial, card_number, iban, cvv2, expiry } = req.body || {};
+  if (!display_name) return res.status(400).json({ error: 'display_name is required' });
+  const bank_code = `manual-${Date.now()}`;
+  const result = await pool.query(
+    `INSERT INTO accounts (bank_code, display_name, balance_rial, card_number, iban, cvv2, expiry)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+    [bank_code, display_name, balance_rial || 0, card_number || null, iban || null, cvv2 || null, expiry || null]
+  );
+  res.json(result.rows[0]);
+});
+
+app.put('/accounts/:id', async (req, res) => {
+  const { id } = req.params;
+  const { display_name, balance_rial, card_number, iban, cvv2, expiry } = req.body || {};
+  const result = await pool.query(
+    `UPDATE accounts SET
+       display_name = COALESCE($1, display_name),
+       balance_rial = COALESCE($2, balance_rial),
+       card_number = COALESCE($3, card_number),
+       iban = COALESCE($4, iban),
+       cvv2 = COALESCE($5, cvv2),
+       expiry = COALESCE($6, expiry)
+     WHERE id = $7 RETURNING *`,
+    [display_name ?? null, balance_rial ?? null, card_number ?? null, iban ?? null, cvv2 ?? null, expiry ?? null, id]
+  );
+  if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
+  res.json(result.rows[0]);
+});
+
 // ---------- Categories ----------
 app.get('/categories', async (req, res) => {
   const result = await pool.query('SELECT * FROM categories WHERE is_active = true ORDER BY direction, name');
