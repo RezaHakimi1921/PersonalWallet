@@ -3,6 +3,88 @@ const content = document.getElementById('content');
 const tabButtons = document.querySelectorAll('[data-tab]');
 const moreSheet = document.getElementById('more-sheet');
 
+// ---------- Jalali (Persian) calendar conversion, self-contained (no CDN dependency) ----------
+// Standard public-domain algorithm (Kazimierz Borkowski / jalaali-js).
+const Jalali = (() => {
+  const div = (a, b) => ~~(a / b);
+  const mod = (a, b) => a - ~~(a / b) * b;
+  const breaks = [-61, 9, 38, 199, 426, 686, 756, 818, 1111, 1181, 1210, 1635, 2060, 2097, 2192, 2262, 2324, 2394, 2456, 3178];
+
+  function jalCal(jy) {
+    const bl = breaks.length;
+    let gy = jy + 621, leapJ = -14, jp = breaks[0], jm, jump, n, i;
+    for (i = 1; i < bl; i += 1) {
+      jm = breaks[i];
+      jump = jm - jp;
+      if (jy < jm) break;
+      leapJ = leapJ + div(jump, 33) * 8 + div(mod(jump, 33), 4);
+      jp = jm;
+    }
+    n = jy - jp;
+    leapJ = leapJ + div(n, 33) * 8 + div(mod(n, 33) + 3, 4);
+    if (mod(jump, 33) === 4 && jump - n === 4) leapJ += 1;
+    const leapG = div(gy, 4) - div((div(gy, 100) + 1) * 3, 4) - 150;
+    const march = 20 + leapJ - leapG;
+    if (jump - n < 6) n = n - jump + div(jump, 33) * 33;
+    let leap = mod(mod(n + 1, 33) - 1, 4);
+    if (leap === -1) leap = 4;
+    return { leap, gy, march };
+  }
+
+  function g2d(gy, gm, gd) {
+    let d = div((gy + div(gm - 8, 6) + 100100) * 1461, 4)
+      + div(153 * mod(gm + 9, 12) + 2, 5)
+      + gd - 34840408;
+    d = d - div(div(gy + 100100 + div(gm - 8, 6), 100) * 3, 4) + 752;
+    return d;
+  }
+
+  function d2g(jdn) {
+    let j = 4 * jdn + 139361631;
+    j = j + div(div(4 * jdn + 183187720, 146097) * 3, 4) * 4 - 3908;
+    const i = div(mod(j, 1461), 4) * 5 + 308;
+    const gd = div(mod(i, 153), 5) + 1;
+    const gm = mod(div(i, 153), 12) + 1;
+    const gy = div(j, 1461) - 100100 + div(8 - gm, 6);
+    return { gy, gm, gd };
+  }
+
+  function j2d(jy, jm, jd) {
+    const r = jalCal(jy);
+    return g2d(r.gy, 3, r.march) + (jm - 1) * 31 - div(jm, 7) * (jm - 7) + jd - 1;
+  }
+
+  function d2j(jdn) {
+    const gy = d2g(jdn).gy;
+    let jy = gy - 621;
+    const r = jalCal(jy);
+    const jdn1f = g2d(gy, 3, r.march);
+    let jd, jm, k = jdn - jdn1f;
+    if (k >= 0) {
+      if (k <= 185) {
+        jm = 1 + div(k, 31);
+        jd = mod(k, 31) + 1;
+        return { jy, jm, jd };
+      }
+      k -= 186;
+    } else {
+      jy -= 1;
+      k += 179;
+      if (r.leap === 1) k += 1;
+    }
+    jm = 7 + div(k, 30);
+    jd = mod(k, 30) + 1;
+    return { jy, jm, jd };
+  }
+
+  return {
+    toJalaali: (gy, gm, gd) => d2j(g2d(gy, gm, gd)),
+    toGregorian: (jy, jm, jd) => d2g(j2d(jy, jm, jd)),
+    monthLength: (jy, jm) => (jm <= 6 ? 31 : jm <= 11 ? 30 : (jalCal(jy).leap === 0 ? 30 : 29)),
+  };
+})();
+const JALALI_MONTH_NAMES = ['فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور', 'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'];
+
 function toman(rial) {
   return Math.round(rial).toLocaleString('en-US');
 }
@@ -348,7 +430,7 @@ async function renderTransactions() {
           <span class="muted">${new Date(t.created_at).toLocaleString('fa-IR')}</span>
         </div>
         <div class="row">
-          <div class="muted">${t.account_name} · ${t.category_name || 'بدون دسته'}${t.note ? ' · ' + t.note : ''}</div>
+          <div class="muted">${t.account_name} · ${t.category_name || 'بدون دسته'}${t.note ? ' · ' + t.note : ''}${t.tags ? ' · 🏷 ' + t.tags : ''}</div>
           <button class="action secondary" data-edit-tx="${t.id}" style="width:auto;padding:4px 10px;margin:0">✎</button>
         </div>
       </div>
@@ -402,6 +484,7 @@ async function openEditTxModal(t) {
       <input id="e-amount" type="text" inputmode="numeric" value="${toman(t.amount_rial)}" />
       <select id="e-category">${renderCatOptions(t.direction)}</select>
       <input id="e-note" placeholder="توضیح" value="${t.note || ''}" />
+      <input id="e-tags" placeholder="تگ (با کاما جدا کن)" value="${t.tags || ''}" />
       <button class="action" id="e-save">ذخیره</button>
       <button class="action secondary" id="e-cancel">انصراف</button>
     </div>
@@ -422,6 +505,7 @@ async function openEditTxModal(t) {
         amount_rial: numFromInput('e-amount'),
         category_id: document.getElementById('e-category').value || null,
         note: document.getElementById('e-note').value || null,
+        tags: document.getElementById('e-tags').value || null,
       }),
     });
     manualModal.hidden = true;
@@ -443,10 +527,12 @@ function txCard(t, cats, editable, accounts) {
         <span class="muted">${t.account_name}</span>
       </div>
       <div class="muted">موجودی بعد از تراکنش: <span class="privacy-target font-num">${t.balance_after_rial != null ? toman(t.balance_after_rial) + ' ریال' : '-'}</span></div>
+      ${t.note && t.note.includes('احتمالاً تکراری') ? `<div style="color:var(--red);font-size:.75rem;margin-top:4px">⚠️ ${t.note}</div>` : ''}
       ${editable ? `
         <select id="cat-${t.id}"><option value="">انتخاب دسته‌بندی...</option>${options}</select>
         ${otherAccountFieldHtml(t.id, accounts, t.account_id)}
         <input id="note-${t.id}" placeholder="توضیح (اختیاری)" />
+        <input id="tags-${t.id}" placeholder="تگ (مثلا سفر، کار — با کاما جدا کن)" />
         <div class="row" style="gap:8px">
           <button class="action" id="confirm-${t.id}" style="flex:1">ثبت و قطعی</button>
           <button class="action danger" id="delete-${t.id}" style="width:auto;flex:0 0 auto">🗑</button>
@@ -468,7 +554,8 @@ function wireTxCard(t, cats, accounts) {
       const otherAccount = accounts.find((a) => String(a.id) === otherAccountSelect.value);
       note = `حساب مقابل: ${otherAccount.display_name}${note ? ' — ' + note : ''}`;
     }
-    await api(`/transactions/${t.id}/confirm`, { method: 'POST', body: JSON.stringify({ category_id, note }) });
+    const tags = document.getElementById(`tags-${t.id}`).value || null;
+    await api(`/transactions/${t.id}/confirm`, { method: 'POST', body: JSON.stringify({ category_id, note, tags }) });
     document.getElementById(`tx-${t.id}`).remove();
   });
   document.getElementById(`delete-${t.id}`).addEventListener('click', async () => {
@@ -568,16 +655,37 @@ async function renderAccounts() {
         <span class="muted" style="font-size:.75rem">موجودی</span>
         <strong class="privacy-target font-num">${toman(a.balance_rial)} ریال</strong>
       </div>
+      <div class="grid2" style="margin-top:10px">
+        <input id="recon-${a.id}" type="text" inputmode="numeric" placeholder="موجودی واقعی کارت (تطبیق)" style="background:rgba(255,255,255,.1);color:white;border-color:rgba(255,255,255,.2)" />
+        <button class="action secondary" data-recon="${a.id}" style="width:auto;background:rgba(255,255,255,.15);border:none;color:white">بررسی</button>
+      </div>
+      <div id="recon-result-${a.id}" class="muted" style="font-size:.7rem;margin-top:4px"></div>
     </div>
   `).join('');
 
   wireCopyFields();
+  accounts.forEach((a) => wireThousandsInput(`recon-${a.id}`));
 
   document.getElementById('acc-new').addEventListener('click', () => openAccountModal(null));
   document.querySelectorAll('[data-edit-acc]').forEach((b) => {
     b.addEventListener('click', (e) => {
       e.stopPropagation();
       openAccountModal(accounts.find((a) => a.id === Number(b.dataset.editAcc)));
+    });
+  });
+  document.querySelectorAll('[data-recon]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const id = b.dataset.recon;
+      const account = accounts.find((a) => a.id === Number(id));
+      const actual = numFromInput(`recon-${id}`);
+      const resultEl = document.getElementById(`recon-result-${id}`);
+      if (!actual) { resultEl.textContent = 'موجودی واقعی رو وارد کن'; return; }
+      const diff = actual - Number(account.balance_rial);
+      if (diff === 0) {
+        resultEl.innerHTML = '✅ موجودی دقیقاً برابره';
+      } else {
+        resultEl.innerHTML = `⚠️ اختلاف: <span class="font-num" style="color:${diff > 0 ? 'var(--green)' : 'var(--red)'}">${diff > 0 ? '+' : ''}${toman(diff)} ریال</span> (برنامه ${diff > 0 ? 'کمتر' : 'بیشتر'} از واقعی ثبت کرده)`;
+      }
     });
   });
 }
@@ -898,12 +1006,15 @@ async function renderAnalytics() {
   const confirmed = txs.filter((t) => t.status === 'confirmed' && t.category_name !== TRANSFER_CATEGORY_NAME);
 
   const now = new Date();
-  const inMonth = (d, monthsAgo) => {
-    const target = new Date(now.getFullYear(), now.getMonth() - monthsAgo, 1);
-    return d.getFullYear() === target.getFullYear() && d.getMonth() === target.getMonth();
+  const nowJalali = Jalali.toJalaali(now.getFullYear(), now.getMonth() + 1, now.getDate());
+  const inJalaliMonth = (d, monthsAgo) => {
+    const j = Jalali.toJalaali(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    let ty = nowJalali.jy, tm = nowJalali.jm - monthsAgo;
+    while (tm < 1) { tm += 12; ty -= 1; }
+    return j.jy === ty && j.jm === tm;
   };
-  const thisMonthExpense = confirmed.filter((t) => t.direction === 'expense' && inMonth(new Date(t.created_at), 0));
-  const lastMonthExpense = confirmed.filter((t) => t.direction === 'expense' && inMonth(new Date(t.created_at), 1));
+  const thisMonthExpense = confirmed.filter((t) => t.direction === 'expense' && inJalaliMonth(new Date(t.created_at), 0));
+  const lastMonthExpense = confirmed.filter((t) => t.direction === 'expense' && inJalaliMonth(new Date(t.created_at), 1));
   const thisSum = thisMonthExpense.reduce((s, t) => s + Number(t.amount_rial), 0);
   const lastSum = lastMonthExpense.reduce((s, t) => s + Number(t.amount_rial), 0);
   const trendPercent = lastSum > 0 ? Math.round(((thisSum - lastSum) / lastSum) * 100) : null;
@@ -927,17 +1038,17 @@ async function renderAnalytics() {
   });
   const maxWeekday = Math.max(...weekdaySums, 1);
 
-  // Calendar heatmap for this month
-  const year = now.getFullYear();
-  const month = now.getMonth();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  // Calendar heatmap for this Jalali month
+  const daysInMonth = Jalali.monthLength(nowJalali.jy, nowJalali.jm);
   const dailySums = {};
   thisMonthExpense.forEach((t) => {
-    const d = new Date(t.created_at).getDate();
-    dailySums[d] = (dailySums[d] || 0) + Number(t.amount_rial);
+    const d = new Date(t.created_at);
+    const j = Jalali.toJalaali(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    dailySums[j.jd] = (dailySums[j.jd] || 0) + Number(t.amount_rial);
   });
   const maxDaily = Math.max(...Object.values(dailySums), 1);
-  const firstWeekday = (new Date(year, month, 1).getDay() + 1) % 7; // align to Saturday-start week
+  const firstOfMonthG = Jalali.toGregorian(nowJalali.jy, nowJalali.jm, 1);
+  const firstWeekday = (new Date(firstOfMonthG.gy, firstOfMonthG.gm - 1, firstOfMonthG.gd).getDay() + 1) % 7; // align to Saturday-start week
 
   let calendarCells = '';
   for (let i = 0; i < firstWeekday; i++) calendarCells += '<div></div>';
@@ -945,7 +1056,8 @@ async function renderAnalytics() {
     const amount = dailySums[day] || 0;
     const intensity = amount / maxDaily;
     const bg = amount === 0 ? 'var(--surface-2)' : `rgba(248,113,113,${0.15 + intensity * 0.7})`;
-    calendarCells += `<div class="cal-cell" style="background:${bg}" title="${amount ? toman(amount) + ' ریال' : ''}">${day}</div>`;
+    const isToday = day === nowJalali.jd;
+    calendarCells += `<div class="cal-cell" style="background:${bg};${isToday ? 'border-color:var(--gold);border-width:2px' : ''}" title="${amount ? toman(amount) + ' ریال' : ''}">${day}</div>`;
   }
 
   content.innerHTML = `
@@ -983,7 +1095,7 @@ async function renderAnalytics() {
     </div>
 
     <div class="card">
-      <strong>تقویم هزینه (این ماه)</strong>
+      <strong>تقویم هزینه (${JALALI_MONTH_NAMES[nowJalali.jm - 1]} ${nowJalali.jy})</strong>
       <div class="muted" style="font-size:.7rem;margin-top:4px">هرچه رنگ پررنگ‌تر، هزینه‌ی اون روز بیشتره</div>
       <div class="cal-grid">
         ${weekdayNames.map((n) => `<div class="muted" style="text-align:center;font-size:.6rem">${n[0]}</div>`).join('')}
@@ -1121,6 +1233,7 @@ async function openManualModal() {
       <select id="m-category">${renderCatOptions('expense')}</select>
       ${otherAccountFieldHtml('m', accounts, null)}
       <input id="m-note" placeholder="توضیح (اختیاری)" />
+      <input id="m-tags" placeholder="تگ (اختیاری، با کاما جدا کن)" />
       <button class="action" id="m-save">ثبت</button>
       <button class="action secondary" id="m-cancel">انصراف</button>
     </div>
@@ -1145,9 +1258,10 @@ async function openManualModal() {
       note = `حساب مقابل: ${otherAccount.display_name}${note ? ' — ' + note : ''}`;
     }
     if (!account_id || !amountToman) return;
+    const tags = document.getElementById('m-tags').value || null;
     await api('/transactions/manual', {
       method: 'POST',
-      body: JSON.stringify({ account_id, amount_rial: amountToman, direction, category_id, note }),
+      body: JSON.stringify({ account_id, amount_rial: amountToman, direction, category_id, note, tags }),
     });
     manualModal.hidden = true;
     const activeTab = [...tabButtons].find((b) => b.classList.contains('active'))?.dataset.tab;

@@ -82,10 +82,26 @@ app.post('/webhook/sms', async (req, res) => {
       matches = matchRes.rows;
     }
 
+    // Duplicate detection: same account/amount/direction within the last 10 minutes.
+    const dupRes = await client.query(
+      `SELECT id FROM transactions
+       WHERE id != $1 AND deleted_at IS NULL AND account_id = $2 AND amount_rial = $3 AND direction = $4
+         AND created_at > now() - interval '10 minutes'`,
+      [txId, account.id, amount_rial, direction]
+    );
+    const isDuplicate = dupRes.rows.length > 0;
+    if (isDuplicate) {
+      await client.query(
+        `UPDATE transactions SET note = 'احتمالاً تکراری با تراکنش #' || $1 WHERE id = $2`,
+        [dupRes.rows[0].id, txId]
+      );
+    }
+
     const sign = direction === 'income' ? '🟢' : '🔴';
     let message = direction === 'income'
       ? `${sign} ${fmt(toToman(amount_rial))} ریال به ${account.display_name} واریز شد`
       : `${sign} ${fmt(toToman(amount_rial))} ریال از ${account.display_name} کسر شد`;
+    if (isDuplicate) message += '\n\n⚠️ شبیه یه تراکنش دیگه‌ست، احتمال تکراری بودن هست.';
 
     const actions = [];
     if (matches.length === 1) {
@@ -159,7 +175,7 @@ app.get('/transactions/trash', async (req, res) => {
 
 // Manual entry: for when the automatic SMS webhook doesn't fire.
 app.post('/transactions/manual', async (req, res) => {
-  const { account_id, amount_rial, direction, category_id, note } = req.body || {};
+  const { account_id, amount_rial, direction, category_id, note, tags } = req.body || {};
   if (!account_id || !amount_rial || !['expense', 'income'].includes(direction)) {
     return res.status(400).json({ error: 'account_id, amount_rial and direction are required' });
   }
@@ -175,9 +191,9 @@ app.post('/transactions/manual', async (req, res) => {
     await client.query('UPDATE accounts SET balance_rial = $1 WHERE id = $2', [newBalance, account_id]);
 
     const txRes = await client.query(
-      `INSERT INTO transactions (account_id, amount_rial, direction, balance_after_rial, raw_text, status, category_id, note)
-       VALUES ($1, $2, $3, $4, 'manual entry', 'confirmed', $5, $6) RETURNING *`,
-      [account_id, amount_rial, direction, newBalance, category_id || null, note || null]
+      `INSERT INTO transactions (account_id, amount_rial, direction, balance_after_rial, raw_text, status, category_id, note, tags)
+       VALUES ($1, $2, $3, $4, 'manual entry', 'confirmed', $5, $6, $7) RETURNING *`,
+      [account_id, amount_rial, direction, newBalance, category_id || null, note || null, tags || null]
     );
     res.json(txRes.rows[0]);
   } catch (err) {
@@ -242,7 +258,7 @@ app.post('/transactions/:id/restore', async (req, res) => {
 // reconciling the account balance(s) for the change.
 app.put('/transactions/:id/edit', async (req, res) => {
   const { id } = req.params;
-  const { amount_rial, direction, account_id, category_id, note } = req.body || {};
+  const { amount_rial, direction, account_id, category_id, note, tags } = req.body || {};
   const client = await pool.connect();
   try {
     const txRes = await client.query('SELECT * FROM transactions WHERE id = $1', [id]);
@@ -271,9 +287,9 @@ app.put('/transactions/:id/edit', async (req, res) => {
     await client.query('UPDATE accounts SET balance_rial = $1 WHERE id = $2', [newBalance, newAccountId]);
 
     const result = await client.query(
-      `UPDATE transactions SET amount_rial = $1, direction = $2, account_id = $3, category_id = $4, note = COALESCE($5, note), balance_after_rial = $6
-       WHERE id = $7 RETURNING *`,
-      [newAmount, newDirection, newAccountId, category_id ?? tx.category_id, note ?? null, newBalance, id]
+      `UPDATE transactions SET amount_rial = $1, direction = $2, account_id = $3, category_id = $4, note = COALESCE($5, note), balance_after_rial = $6, tags = COALESCE($7, tags)
+       WHERE id = $8 RETURNING *`,
+      [newAmount, newDirection, newAccountId, category_id ?? tx.category_id, note ?? null, newBalance, tags ?? null, id]
     );
     res.json(result.rows[0]);
   } catch (err) {
@@ -286,10 +302,10 @@ app.put('/transactions/:id/edit', async (req, res) => {
 
 app.post('/transactions/:id/confirm', async (req, res) => {
   const { id } = req.params;
-  const { category_id, note } = req.body || {};
+  const { category_id, note, tags } = req.body || {};
   const result = await pool.query(
-    `UPDATE transactions SET category_id = $1, note = $2, status = 'confirmed' WHERE id = $3 RETURNING *`,
-    [category_id || null, note || null, id]
+    `UPDATE transactions SET category_id = $1, note = $2, status = 'confirmed', tags = COALESCE($3, tags) WHERE id = $4 RETURNING *`,
+    [category_id || null, note || null, tags || null, id]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
   res.json(result.rows[0]);

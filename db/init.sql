@@ -74,6 +74,7 @@ CREATE TABLE transactions (
   category_id INT REFERENCES categories(id),
   note TEXT,
   installment_id INT REFERENCES installments(id),
+  tags TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   deleted_at TIMESTAMPTZ
 );
