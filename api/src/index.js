@@ -470,11 +470,41 @@ app.put('/investments/:id', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
-// ---------- Daily installment due reminder (08:00 Asia/Tehran) ----------
+async function sendPeriodReport(title, sinceDate, untilDate) {
+  const txRes = await pool.query(
+    `SELECT t.*, c.name AS category_name FROM transactions t
+     LEFT JOIN categories c ON c.id = t.category_id
+     WHERE t.status = 'confirmed' AND t.created_at >= $1 AND t.created_at < $2
+       AND (c.name IS NULL OR c.name != $3)`,
+    [sinceDate, untilDate, TRANSFER_CATEGORY_NAME]
+  );
+  const rows = txRes.rows;
+  const expense = rows.filter((t) => t.direction === 'expense').reduce((s, t) => s + Number(t.amount_rial), 0);
+  const income = rows.filter((t) => t.direction === 'income').reduce((s, t) => s + Number(t.amount_rial), 0);
+
+  const byCategory = {};
+  rows.filter((t) => t.direction === 'expense').forEach((t) => {
+    const name = t.category_name || 'بدون دسته';
+    byCategory[name] = (byCategory[name] || 0) + Number(t.amount_rial);
+  });
+  const topCategory = Object.entries(byCategory).sort((a, b) => b[1] - a[1])[0];
+
+  const lines = [
+    `⬇️ هزینه: ${fmt(toToman(expense))} تومان`,
+    `⬆️ درآمد: ${fmt(toToman(income))} تومان`,
+  ];
+  if (topCategory) lines.push(`بیشترین هزینه: ${topCategory[0]} (${fmt(toToman(topCategory[1]))} تومان)`);
+
+  await sendNtfy({ title, message: lines.join('\n'), priority: 4, tags: ['bar_chart'] });
+}
+
+const TRANSFER_CATEGORY_NAME = 'انتقال وجه بین حساب';
+
+// ---------- Daily: installment due reminder + monthly report on the 1st of the Jalali month (08:00 Asia/Tehran) ----------
 cron.schedule('0 8 * * *', async () => {
   try {
     const now = new Date();
-    const { jd } = jalaali.toJalaali(now);
+    const { jy, jm, jd } = jalaali.toJalaali(now);
     const dueRes = await pool.query(
       `SELECT * FROM installments WHERE status = 'active' AND due_day_of_month = $1`,
       [jd]
@@ -487,6 +517,29 @@ cron.schedule('0 8 * * *', async () => {
         tags: ['warning', 'calendar'],
       });
     }
+
+    if (jd === 1) {
+      const prevJy = jm === 1 ? jy - 1 : jy;
+      const prevJm = jm === 1 ? 12 : jm - 1;
+      const since = jalaali.toGregorian(prevJy, prevJm, 1);
+      const until = jalaali.toGregorian(jy, jm, 1);
+      await sendPeriodReport(
+        '📊 گزارش ماه گذشته',
+        new Date(since.gy, since.gm - 1, since.gd),
+        new Date(until.gy, until.gm - 1, until.gd)
+      );
+    }
+  } catch (err) {
+    console.error('cron error', err);
+  }
+});
+
+// ---------- Weekly report, Saturday mornings (08:00 Asia/Tehran) ----------
+cron.schedule('0 8 * * 6', async () => {
+  try {
+    const until = new Date();
+    const since = new Date(until.getTime() - 7 * 24 * 60 * 60 * 1000);
+    await sendPeriodReport('📊 گزارش هفته گذشته', since, until);
   } catch (err) {
     console.error('cron error', err);
   }

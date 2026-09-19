@@ -291,10 +291,42 @@ function wireTransferField(catSelectId, otherAccountSelectId, cats) {
 const TX_PAGE_SIZE = 10;
 let txPage = 1;
 
+let txFilters = { account_id: '', category_id: '', direction: '', from: '', to: '' };
+
 async function renderTransactions() {
-  const txs = await api('/transactions');
+  const [allTxs, accounts, cats] = await Promise.all([api('/transactions'), api('/accounts'), api('/categories')]);
+
+  const txs = allTxs.filter((t) => {
+    if (txFilters.account_id && String(t.account_id) !== txFilters.account_id) return false;
+    if (txFilters.category_id && String(t.category_id) !== txFilters.category_id) return false;
+    if (txFilters.direction && t.direction !== txFilters.direction) return false;
+    if (txFilters.from && new Date(t.created_at) < new Date(txFilters.from)) return false;
+    if (txFilters.to && new Date(t.created_at) > new Date(txFilters.to + 'T23:59:59')) return false;
+    return true;
+  });
+
+  const filterBarHtml = `
+    <div class="card">
+      <div class="grid2">
+        <select id="tf-account"><option value="">همه حساب‌ها</option>${accounts.map((a) => `<option value="${a.id}" ${txFilters.account_id === String(a.id) ? 'selected' : ''}>${a.display_name}</option>`).join('')}</select>
+        <select id="tf-category"><option value="">همه دسته‌ها</option>${cats.map((c) => `<option value="${c.id}" ${txFilters.category_id === String(c.id) ? 'selected' : ''}>${c.name}</option>`).join('')}</select>
+      </div>
+      <select id="tf-direction">
+        <option value="" ${!txFilters.direction ? 'selected' : ''}>هزینه و درآمد</option>
+        <option value="expense" ${txFilters.direction === 'expense' ? 'selected' : ''}>فقط هزینه</option>
+        <option value="income" ${txFilters.direction === 'income' ? 'selected' : ''}>فقط درآمد</option>
+      </select>
+      <div class="grid2">
+        <input id="tf-from" type="date" value="${txFilters.from}" />
+        <input id="tf-to" type="date" value="${txFilters.to}" />
+      </div>
+      <button class="action secondary" id="tf-clear">پاک کردن فیلترها</button>
+    </div>
+  `;
+
   if (txs.length === 0) {
-    content.innerHTML = '<p class="muted">هیچ تراکنشی ثبت نشده.</p>';
+    content.innerHTML = filterBarHtml + '<p class="muted">تراکنشی با این فیلتر پیدا نشد.</p>';
+    wireTxFilters();
     return;
   }
   const totalPages = Math.max(1, Math.ceil(txs.length / TX_PAGE_SIZE));
@@ -302,7 +334,7 @@ async function renderTransactions() {
   const start = (txPage - 1) * TX_PAGE_SIZE;
   const pageItems = txs.slice(start, start + TX_PAGE_SIZE);
 
-  content.innerHTML = `
+  content.innerHTML = filterBarHtml + `
     <div class="muted" style="margin-bottom:8px">${txs.length} تراکنش</div>
     ${pageItems.map((t) => `
       <div class="card">
@@ -329,6 +361,20 @@ async function renderTransactions() {
   document.getElementById('tx-next').addEventListener('click', () => { txPage++; renderTransactions(); });
   document.querySelectorAll('[data-edit-tx]').forEach((b) => {
     b.addEventListener('click', () => openEditTxModal(txs.find((t) => t.id === Number(b.dataset.editTx))));
+  });
+  wireTxFilters();
+}
+
+function wireTxFilters() {
+  document.getElementById('tf-account').addEventListener('change', (e) => { txFilters.account_id = e.target.value; txPage = 1; renderTransactions(); });
+  document.getElementById('tf-category').addEventListener('change', (e) => { txFilters.category_id = e.target.value; txPage = 1; renderTransactions(); });
+  document.getElementById('tf-direction').addEventListener('change', (e) => { txFilters.direction = e.target.value; txPage = 1; renderTransactions(); });
+  document.getElementById('tf-from').addEventListener('change', (e) => { txFilters.from = e.target.value; txPage = 1; renderTransactions(); });
+  document.getElementById('tf-to').addEventListener('change', (e) => { txFilters.to = e.target.value; txPage = 1; renderTransactions(); });
+  document.getElementById('tf-clear').addEventListener('click', () => {
+    txFilters = { account_id: '', category_id: '', direction: '', from: '', to: '' };
+    txPage = 1;
+    renderTransactions();
   });
 }
 
