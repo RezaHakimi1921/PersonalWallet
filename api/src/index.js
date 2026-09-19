@@ -82,9 +82,10 @@ app.post('/webhook/sms', async (req, res) => {
       matches = matchRes.rows;
     }
 
-    const directionLabel = direction === 'income' ? 'واریز' : 'برداشت';
     const sign = direction === 'income' ? '🟢' : '🔴';
-    let message = `${sign} ${fmt(toToman(amount_rial))} تومان ${directionLabel} - ${account.display_name}\nموجودی: ${fmt(toToman(newBalance))} تومان`;
+    let message = direction === 'income'
+      ? `${sign} ${fmt(toToman(amount_rial))} تومان به ${account.display_name} واریز شد`
+      : `${sign} ${fmt(toToman(amount_rial))} تومان از ${account.display_name} کسر شد`;
 
     const actions = [];
     if (matches.length === 1) {
