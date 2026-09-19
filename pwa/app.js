@@ -81,6 +81,7 @@ async function render(tab) {
     if (tab === 'installments') return renderInstallments();
     if (tab === 'investments') return renderInvestments();
     if (tab === 'categories') return renderCategories();
+    if (tab === 'analytics') return renderAnalytics();
     if (tab === 'debts') return renderDebts();
     if (tab === 'trash') return renderTrash();
   } catch (e) {
@@ -890,6 +891,106 @@ async function renderCategories() {
       renderCategories();
     });
   });
+}
+
+async function renderAnalytics() {
+  const [txs, categories] = await Promise.all([api('/transactions'), api('/categories')]);
+  const confirmed = txs.filter((t) => t.status === 'confirmed' && t.category_name !== TRANSFER_CATEGORY_NAME);
+
+  const now = new Date();
+  const inMonth = (d, monthsAgo) => {
+    const target = new Date(now.getFullYear(), now.getMonth() - monthsAgo, 1);
+    return d.getFullYear() === target.getFullYear() && d.getMonth() === target.getMonth();
+  };
+  const thisMonthExpense = confirmed.filter((t) => t.direction === 'expense' && inMonth(new Date(t.created_at), 0));
+  const lastMonthExpense = confirmed.filter((t) => t.direction === 'expense' && inMonth(new Date(t.created_at), 1));
+  const thisSum = thisMonthExpense.reduce((s, t) => s + Number(t.amount_rial), 0);
+  const lastSum = lastMonthExpense.reduce((s, t) => s + Number(t.amount_rial), 0);
+  const trendPercent = lastSum > 0 ? Math.round(((thisSum - lastSum) / lastSum) * 100) : null;
+
+  // Top spending categories this month
+  const byCategory = {};
+  thisMonthExpense.forEach((t) => {
+    const name = t.category_name || 'بدون دسته';
+    byCategory[name] = (byCategory[name] || 0) + Number(t.amount_rial);
+  });
+  const topCategories = Object.entries(byCategory).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const maxCategoryAmount = topCategories[0]?.[1] || 1;
+
+  // Weekday heatmap (Saturday..Friday), this month
+  const weekdayNames = ['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه'];
+  const weekdaySums = [0, 0, 0, 0, 0, 0, 0];
+  thisMonthExpense.forEach((t) => {
+    const jsDay = new Date(t.created_at).getDay(); // 0=Sun..6=Sat
+    const persianIndex = (jsDay + 1) % 7; // shift so Saturday=0
+    weekdaySums[persianIndex] += Number(t.amount_rial);
+  });
+  const maxWeekday = Math.max(...weekdaySums, 1);
+
+  // Calendar heatmap for this month
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const dailySums = {};
+  thisMonthExpense.forEach((t) => {
+    const d = new Date(t.created_at).getDate();
+    dailySums[d] = (dailySums[d] || 0) + Number(t.amount_rial);
+  });
+  const maxDaily = Math.max(...Object.values(dailySums), 1);
+  const firstWeekday = (new Date(year, month, 1).getDay() + 1) % 7; // align to Saturday-start week
+
+  let calendarCells = '';
+  for (let i = 0; i < firstWeekday; i++) calendarCells += '<div></div>';
+  for (let day = 1; day <= daysInMonth; day++) {
+    const amount = dailySums[day] || 0;
+    const intensity = amount / maxDaily;
+    const bg = amount === 0 ? 'var(--surface-2)' : `rgba(248,113,113,${0.15 + intensity * 0.7})`;
+    calendarCells += `<div class="cal-cell" style="background:${bg}" title="${amount ? toman(amount) + ' ریال' : ''}">${day}</div>`;
+  }
+
+  content.innerHTML = `
+    <div class="card">
+      <div class="row">
+        <span class="muted">هزینه این ماه نسبت به ماه قبل</span>
+        ${trendPercent != null ? `<strong class="${trendPercent >= 0 ? 'trend-up' : 'trend-down'} font-num">${trendPercent >= 0 ? '▲' : '▼'} ${Math.abs(trendPercent)}٪</strong>` : '<span class="muted">داده‌ی ماه قبل نیست</span>'}
+      </div>
+      <div class="row muted font-num" style="margin-top:6px;font-size:.75rem">
+        <span>این ماه: ${toman(thisSum)} ریال</span>
+        <span>ماه قبل: ${toman(lastSum)} ریال</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <strong>پرخرج‌ترین دسته‌ها (این ماه)</strong>
+      ${topCategories.length === 0 ? '<p class="muted">هزینه‌ای ثبت نشده.</p>' : topCategories.map(([name, amount]) => `
+        <div class="bar-row">
+          <span style="font-size:.75rem;width:90px;flex-shrink:0">${name}</span>
+          <div class="bar-track"><div class="bar-fill" style="width:${Math.round(amount / maxCategoryAmount * 100)}%"></div></div>
+          <span class="font-num" style="font-size:.7rem;width:auto;flex-shrink:0">${toman(amount)}</span>
+        </div>
+      `).join('')}
+    </div>
+
+    <div class="card">
+      <strong>هزینه به تفکیک روز هفته (این ماه)</strong>
+      ${weekdayNames.map((name, i) => `
+        <div class="weekday-bar-row">
+          <span style="font-size:.7rem;width:55px;flex-shrink:0">${name}</span>
+          <div class="weekday-bar-track"><div class="weekday-bar-fill" style="width:${Math.round(weekdaySums[i] / maxWeekday * 100)}%"></div></div>
+          <span class="font-num" style="font-size:.65rem;width:auto;flex-shrink:0">${toman(weekdaySums[i])}</span>
+        </div>
+      `).join('')}
+    </div>
+
+    <div class="card">
+      <strong>تقویم هزینه (این ماه)</strong>
+      <div class="muted" style="font-size:.7rem;margin-top:4px">هرچه رنگ پررنگ‌تر، هزینه‌ی اون روز بیشتره</div>
+      <div class="cal-grid">
+        ${weekdayNames.map((n) => `<div class="muted" style="text-align:center;font-size:.6rem">${n[0]}</div>`).join('')}
+        ${calendarCells}
+      </div>
+    </div>
+  `;
 }
 
 async function renderDebts() {
