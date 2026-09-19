@@ -477,7 +477,7 @@ function wireTxCard(t, cats, accounts) {
 }
 
 const BANK_THEMES = {
-  resalat: 'linear-gradient(135deg, #0a7d3f, #054023)',
+  resalat: 'linear-gradient(160deg, #2563eb 0%, #1e40af 45%, #0c1e4a 100%)',
   blu: 'linear-gradient(135deg, #0ea5a6, #0a4f50)',
   pasargad: 'linear-gradient(135deg, #00573f, #7a5c00)',
 };
@@ -495,19 +495,21 @@ function bankLogoHtml(bankCode, size) {
   return `<img src="${url}" alt="" style="width:${size}px;height:${size}px;border-radius:8px;background:white;padding:3px;object-fit:contain" onerror="this.remove()" />`;
 }
 
-function copyableField(label, value) {
+function copyableField(label, value, displayValue) {
   if (!value) return '';
   return `
     <div class="row card-field" data-copy="${value}" style="margin-top:8px;cursor:pointer">
       <span style="font-size:.7rem;opacity:.8">${label}</span>
-      <span class="font-num copy-value" style="font-size:.8rem;letter-spacing:1px">${value} 📋</span>
+      <span class="font-num copy-value" style="font-size:.8rem;letter-spacing:1px">${displayValue || value} 📋</span>
     </div>
   `;
 }
 
 function cardInfoHtml(a) {
+  const spacedCardNumber = a.card_number ? a.card_number.replace(/\D/g, '').replace(/(.{4})/g, '$1 ').trim() : null;
   return `
-    ${copyableField('شماره کارت', a.card_number)}
+    <div class="card-chip"></div>
+    ${copyableField('شماره کارت', a.card_number, spacedCardNumber)}
     ${copyableField('شماره حساب', a.account_number)}
     ${copyableField('شبا', a.iban ? 'IR' + a.iban : null)}
     <div class="row" style="margin-top:8px">
