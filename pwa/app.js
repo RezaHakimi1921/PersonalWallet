@@ -4,7 +4,7 @@ const tabButtons = document.querySelectorAll('[data-tab]');
 const moreSheet = document.getElementById('more-sheet');
 
 function toman(rial) {
-  return Math.round(rial / 10).toLocaleString('en-US');
+  return Math.round(rial).toLocaleString('en-US');
 }
 
 // Live-format a text input with thousand separators as the user types (numeric inputs
@@ -105,7 +105,7 @@ function donutChartHtml(chartData) {
   const legend = chartData.map((d, i) => `
     <div class="row" style="font-size:.75rem;margin-top:4px">
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${CHART_COLORS[i % CHART_COLORS.length]};margin-left:6px"></span>${d.name}</span>
-      <span class="muted font-num">${d.value.toLocaleString('en-US')} ت</span>
+      <span class="muted font-num">${d.value.toLocaleString('en-US')} ریال</span>
     </div>
   `).join('');
   return `
@@ -143,14 +143,14 @@ async function renderOverview() {
   realFlowTx.filter((t) => t.direction === 'expense' && t.category_id).forEach((t) => {
     const cat = categories.find((c) => c.id === t.category_id);
     const name = cat ? cat.name : 'سایر';
-    expenseByCategory[name] = (expenseByCategory[name] || 0) + Math.round(Number(t.amount_rial) / 10);
+    expenseByCategory[name] = (expenseByCategory[name] || 0) + Number(t.amount_rial);
   });
   const chartData = Object.entries(expenseByCategory).map(([name, value]) => ({ name, value: Number(value) }));
 
   let html = `
     <div class="card" style="text-align:center">
       <div class="muted">دارایی خالص شما</div>
-      <div class="privacy-target font-num" style="font-size:1.6rem;font-weight:800;margin-top:6px">${toman(netWorth)} <span class="muted" style="font-size:.8rem">تومان</span></div>
+      <div class="privacy-target font-num" style="font-size:1.6rem;font-weight:800;margin-top:6px">${toman(netWorth)} <span class="muted" style="font-size:.8rem">ریال</span></div>
     </div>
     <div class="metric-grid" style="grid-template-columns:1fr 1fr 1fr">
       <div class="metric-card" style="background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.25)">
@@ -185,12 +185,12 @@ async function renderOverview() {
     <div class="metric-grid">
       <div class="metric-card">
         <div class="row"><span class="muted" style="font-size:.75rem">هزینه ماه</span> <span style="color:var(--red)">↗</span></div>
-        <div class="privacy-target font-num" style="color:var(--red);font-weight:800;font-size:1.1rem;margin-top:4px">-${toman(monthExpense)} <span class="muted" style="font-size:.65rem">ت</span></div>
+        <div class="privacy-target font-num" style="color:var(--red);font-weight:800;font-size:1.1rem;margin-top:4px">-${toman(monthExpense)} <span class="muted" style="font-size:.65rem">ریال</span></div>
         <div class="mini-bar"><div class="mini-bar-fill" style="width:${Math.round(monthExpense / maxFlow * 100)}%;background:var(--red)"></div></div>
       </div>
       <div class="metric-card">
         <div class="row"><span class="muted" style="font-size:.75rem">درآمد ماه</span> <span style="color:var(--green)">↙</span></div>
-        <div class="privacy-target font-num" style="color:var(--green);font-weight:800;font-size:1.1rem;margin-top:4px">+${toman(monthIncome)} <span class="muted" style="font-size:.65rem">ت</span></div>
+        <div class="privacy-target font-num" style="color:var(--green);font-weight:800;font-size:1.1rem;margin-top:4px">+${toman(monthIncome)} <span class="muted" style="font-size:.65rem">ریال</span></div>
         <div class="mini-bar"><div class="mini-bar-fill" style="width:${Math.round(monthIncome / maxFlow * 100)}%;background:var(--green)"></div></div>
       </div>
     </div>
@@ -208,7 +208,7 @@ async function renderOverview() {
             ${bankLogoHtml(a.bank_code, 32) || '<div class="mini-bank-icon"></div>'}
             <div style="font-size:.85rem;font-weight:600">${a.display_name}</div>
             ${cardInfoHtml(a)}
-            <div class="privacy-target font-num" style="margin-top:8px;font-weight:700">${toman(a.balance_rial)} تومان</div>
+            <div class="privacy-target font-num" style="margin-top:8px;font-weight:700">${toman(a.balance_rial)} ریال</div>
           </div>
         `).join('')}
       </div>
@@ -234,7 +234,7 @@ async function renderOverview() {
             <div class="progress-track"><div class="progress-fill" style="width:${percent}%"></div></div>
             <div class="row muted" style="font-size:.7rem;margin-top:2px">
               <span>موعد: روز ${i.due_day_of_month} ماه</span>
-              <span class="font-num privacy-target">${toman(i.installment_amount_rial)} تومان</span>
+              <span class="font-num privacy-target">${toman(i.installment_amount_rial)} ریال</span>
             </div>
           </div>
         `;
@@ -342,7 +342,7 @@ async function renderTransactions() {
       <div class="card">
         <div class="row">
           <span class="${t.direction === 'income' ? 'amount-income' : 'amount-expense'} font-num">
-            ${t.direction === 'income' ? '+' : '-'}${toman(t.amount_rial)} تومان
+            ${t.direction === 'income' ? '+' : '-'}${toman(t.amount_rial)} ریال
           </span>
           <span class="muted">${new Date(t.created_at).toLocaleString('fa-IR')}</span>
         </div>
@@ -418,7 +418,7 @@ async function openEditTxModal(t) {
       body: JSON.stringify({
         account_id: document.getElementById('e-account').value,
         direction: document.getElementById('e-direction').value,
-        amount_rial: numFromInput('e-amount') * 10,
+        amount_rial: numFromInput('e-amount'),
         category_id: document.getElementById('e-category').value || null,
         note: document.getElementById('e-note').value || null,
       }),
@@ -437,11 +437,11 @@ function txCard(t, cats, editable, accounts) {
     <div class="card" id="tx-${t.id}">
       <div class="row">
         <span class="${t.direction === 'income' ? 'amount-income' : 'amount-expense'}">
-          ${t.direction === 'income' ? '+' : '-'}${toman(t.amount_rial)} تومان
+          ${t.direction === 'income' ? '+' : '-'}${toman(t.amount_rial)} ریال
         </span>
         <span class="muted">${t.account_name}</span>
       </div>
-      <div class="muted">موجودی بعد از تراکنش: <span class="privacy-target font-num">${t.balance_after_rial != null ? toman(t.balance_after_rial) + ' تومان' : '-'}</span></div>
+      <div class="muted">موجودی بعد از تراکنش: <span class="privacy-target font-num">${t.balance_after_rial != null ? toman(t.balance_after_rial) + ' ریال' : '-'}</span></div>
       ${editable ? `
         <select id="cat-${t.id}"><option value="">انتخاب دسته‌بندی...</option>${options}</select>
         ${otherAccountFieldHtml(t.id, accounts, t.account_id)}
@@ -502,7 +502,7 @@ function copyableField(label, value, displayValue) {
   return `
     <div class="row card-field" data-copy="${value}" style="margin-top:8px;cursor:pointer">
       <span style="font-size:.7rem;opacity:.8">${label}</span>
-      <span class="font-num copy-value" style="font-size:.8rem;letter-spacing:1px">${displayValue || value} 📋</span>
+      <span class="font-num copy-value" style="font-size:.8rem;letter-spacing:1px;direction:ltr;unicode-bidi:isolate;display:inline-block">${displayValue || value} 📋</span>
     </div>
   `;
 }
@@ -553,7 +553,7 @@ async function renderAccounts() {
   content.innerHTML = `
     <div class="card row">
       <span class="muted">مجموع موجودی</span>
-      <strong class="privacy-target font-num" style="color:var(--green)">${toman(total)} تومان</strong>
+      <strong class="privacy-target font-num" style="color:var(--green)">${toman(total)} ریال</strong>
     </div>
     <button class="action" id="acc-new">+ حساب جدید</button>
   ` + accounts.map((a) => `
@@ -565,7 +565,7 @@ async function renderAccounts() {
       ${cardInfoHtml(a)}
       <div class="row" style="margin-top:12px">
         <span class="muted" style="font-size:.75rem">موجودی</span>
-        <strong class="privacy-target font-num">${toman(a.balance_rial)} تومان</strong>
+        <strong class="privacy-target font-num">${toman(a.balance_rial)} ریال</strong>
       </div>
     </div>
   `).join('');
@@ -587,7 +587,7 @@ function openAccountModal(account) {
     <div class="card">
       <strong>${isNew ? 'حساب بانکی جدید' : 'ویرایش حساب'}</strong>
       <input id="acc-name" placeholder="نام بانک/حساب" value="${account?.display_name || ''}" />
-      <input id="acc-balance" type="text" inputmode="numeric" placeholder="موجودی (تومان)" value="${account ? toman(account.balance_rial) : ''}" />
+      <input id="acc-balance" type="text" inputmode="numeric" placeholder="موجودی (ریال)" value="${account ? toman(account.balance_rial) : ''}" />
       <input id="acc-card" placeholder="شماره کارت (اختیاری)" value="${account?.card_number || ''}" />
       <input id="acc-account-number" placeholder="شماره حساب (اختیاری)" value="${account?.account_number || ''}" />
       <input id="acc-iban" placeholder="شبا بدون IR (اختیاری)" value="${account?.iban || ''}" />
@@ -595,7 +595,7 @@ function openAccountModal(account) {
         <input id="acc-cvv2" placeholder="CVV2 (اختیاری)" value="${account?.cvv2 || ''}" />
         <input id="acc-expiry" placeholder="انقضا MM/YY (اختیاری)" inputmode="numeric" value="${account?.expiry || ''}" />
       </div>
-      <input id="acc-threshold" type="text" inputmode="numeric" placeholder="هشدار وقتی موجودی کمتر از این شد (تومان، اختیاری)" value="${account?.low_balance_threshold_rial ? toman(account.low_balance_threshold_rial) : ''}" />
+      <input id="acc-threshold" type="text" inputmode="numeric" placeholder="هشدار وقتی موجودی کمتر از این شد (ریال، اختیاری)" value="${account?.low_balance_threshold_rial ? toman(account.low_balance_threshold_rial) : ''}" />
       <button class="action" id="acc-save">${isNew ? 'افزودن' : 'ذخیره'}</button>
       <button class="action secondary" id="acc-cancel">انصراف</button>
     </div>
@@ -611,13 +611,13 @@ function openAccountModal(account) {
     if (!display_name) return;
     const body = {
       display_name,
-      balance_rial: numFromInput('acc-balance') * 10,
+      balance_rial: numFromInput('acc-balance'),
       card_number: document.getElementById('acc-card').value || null,
       account_number: document.getElementById('acc-account-number').value || null,
       iban: document.getElementById('acc-iban').value || null,
       cvv2: document.getElementById('acc-cvv2').value || null,
       expiry: document.getElementById('acc-expiry').value || null,
-      low_balance_threshold_rial: numFromInput('acc-threshold') ? numFromInput('acc-threshold') * 10 : null,
+      low_balance_threshold_rial: numFromInput('acc-threshold') ? numFromInput('acc-threshold') : null,
     };
     if (isNew) {
       await api('/accounts', { method: 'POST', body: JSON.stringify(body) });
@@ -636,7 +636,7 @@ async function renderInstallments() {
       <strong>افزودن قسط/وام جدید</strong>
       <input id="i-title" placeholder="عنوان (مثلا: وام خودرو)" />
       <select id="i-type"><option value="installment">قسط</option><option value="loan">وام</option></select>
-      <input id="i-amount" type="text" inputmode="numeric" placeholder="مبلغ هر قسط (تومان)" />
+      <input id="i-amount" type="text" inputmode="numeric" placeholder="مبلغ هر قسط (ریال)" />
       <input id="i-count" type="text" inputmode="numeric" placeholder="تعداد کل اقساط" />
       <input id="i-day" type="text" inputmode="numeric" placeholder="روز موعد در ماه (شمسی)" />
       <button class="action" id="i-add">افزودن</button>
@@ -653,12 +653,12 @@ async function renderInstallments() {
       <div class="progress-track"><div class="progress-fill" style="width:${percent}%"></div></div>
       <div class="row muted" style="margin-top:6px;font-size:.75rem">
         <span>قسط ${i.paid_count} از ${i.total_count} · روز موعد: ${i.due_day_of_month}</span>
-        <span class="font-num">${toman(i.installment_amount_rial)} تومان/ماه</span>
+        <span class="font-num">${toman(i.installment_amount_rial)} ریال/ماه</span>
       </div>
       ${i.status === 'active' ? `
         <div class="row" style="margin-top:8px">
           <span class="muted" style="font-size:.75rem">مانده بدهی</span>
-          <strong class="font-num privacy-target" style="color:var(--red)">${toman(remaining)} تومان</strong>
+          <strong class="font-num privacy-target" style="color:var(--red)">${toman(remaining)} ریال</strong>
         </div>
         <div class="row" style="gap:8px">
           <button class="action" data-pay="${i.id}" style="flex:1">ثبت پرداخت دستی</button>
@@ -687,7 +687,7 @@ async function renderInstallments() {
       method: 'POST',
       body: JSON.stringify({
         title, type,
-        installment_amount_rial: installment_amount_toman * 10,
+        installment_amount_rial: installment_amount_toman,
         total_count, due_day_of_month,
       }),
     });
@@ -715,7 +715,7 @@ async function renderInstallments() {
       const item = items.find((i) => i.id === Number(b.dataset.editInst));
       const newTitle = prompt('عنوان:', item.title);
       if (newTitle == null) return;
-      const newAmount = prompt('مبلغ هر قسط (تومان):', toman(item.installment_amount_rial));
+      const newAmount = prompt('مبلغ هر قسط (ریال):', toman(item.installment_amount_rial));
       if (newAmount == null) return;
       const newCount = prompt('تعداد کل اقساط:', item.total_count);
       if (newCount == null) return;
@@ -725,7 +725,7 @@ async function renderInstallments() {
         method: 'PUT',
         body: JSON.stringify({
           title: newTitle,
-          installment_amount_rial: Number(newAmount.replace(/,/g, '')) * 10,
+          installment_amount_rial: Number(newAmount.replace(/,/g, '')),
           total_count: Number(newCount),
           due_day_of_month: Number(newDay),
         }),
@@ -763,9 +763,9 @@ async function renderInvestments() {
       </select>
       <div id="v-qty-fields">
         <input id="v-qty" type="text" inputmode="decimal" placeholder="مقدار (مثلا 0.98 گرم)" />
-        <input id="v-unit-price" type="text" inputmode="numeric" placeholder="قیمت هر واحد هنگام خرید (تومان)" />
+        <input id="v-unit-price" type="text" inputmode="numeric" placeholder="قیمت هر واحد هنگام خرید (ریال)" />
       </div>
-      <input id="v-amount" type="text" inputmode="numeric" placeholder="مبلغ کل سرمایه‌گذاری‌شده (تومان)" hidden />
+      <input id="v-amount" type="text" inputmode="numeric" placeholder="مبلغ کل سرمایه‌گذاری‌شده (ریال)" hidden />
       <button class="action" id="v-add">افزودن</button>
     </div>
   ` + (items.length === 0 ? '<p class="muted">سرمایه‌گذاری ثبت نشده.</p>' : items.map((v) => {
@@ -779,16 +779,16 @@ async function renderInvestments() {
         <strong>${v.title}</strong>
         <span class="badge ${gainPercent >= 0 ? 'gain' : 'loss'}">${gainPercent >= 0 ? '+' : ''}${gainPercent}%</span>
       </div>
-      ${unitLabel ? `<div class="muted font-num">${v.quantity} ${unitLabel} · خرید هر واحد: ${toman(v.purchase_unit_price_rial)} تومان</div>` : ''}
-      <div class="muted privacy-target font-num">مبلغ اولیه: ${toman(v.invested_amount_rial)} تومان</div>
+      ${unitLabel ? `<div class="muted font-num">${v.quantity} ${unitLabel} · خرید هر واحد: ${toman(v.purchase_unit_price_rial)} ریال</div>` : ''}
+      <div class="muted privacy-target font-num">مبلغ اولیه: ${toman(v.invested_amount_rial)} ریال</div>
       ${unitLabel ? `
         <div class="grid2">
-          <input id="v-cur-price-${v.id}" type="text" inputmode="numeric" placeholder="قیمت فعلی هر واحد (تومان)" value="${toman(v.current_unit_price_rial || v.purchase_unit_price_rial)}" />
+          <input id="v-cur-price-${v.id}" type="text" inputmode="numeric" placeholder="قیمت فعلی هر واحد (ریال)" value="${toman(v.current_unit_price_rial || v.purchase_unit_price_rial)}" />
           <button class="action secondary" data-update-price="${v.id}">به‌روزرسانی قیمت</button>
         </div>
       ` : `
         <div class="grid2">
-          <input id="v-cur-${v.id}" type="text" inputmode="numeric" placeholder="ارزش فعلی (تومان)" value="${toman(v.current_value_rial)}" />
+          <input id="v-cur-${v.id}" type="text" inputmode="numeric" placeholder="ارزش فعلی (ریال)" value="${toman(v.current_value_rial)}" />
           <button class="action secondary" data-update="${v.id}">به‌روزرسانی</button>
         </div>
       `}
@@ -820,12 +820,12 @@ async function renderInvestments() {
     if (asset_type === 'other') {
       const amountToman = numFromInput('v-amount');
       if (!amountToman) return;
-      body = { title, asset_type, invested_amount_rial: amountToman * 10 };
+      body = { title, asset_type, invested_amount_rial: amountToman };
     } else {
       const quantity = Number(document.getElementById('v-qty').value);
       const unitPriceToman = numFromInput('v-unit-price');
       if (!quantity || !unitPriceToman) return;
-      body = { title, asset_type, quantity, purchase_unit_price_rial: unitPriceToman * 10 };
+      body = { title, asset_type, quantity, purchase_unit_price_rial: unitPriceToman };
     }
     await api('/investments', { method: 'POST', body: JSON.stringify(body) });
     renderInvestments();
@@ -834,7 +834,7 @@ async function renderInvestments() {
   document.querySelectorAll('[data-update-price]').forEach((b) => {
     b.addEventListener('click', async () => {
       const id = b.dataset.updatePrice;
-      const current_unit_price_rial = numFromInput(`v-cur-price-${id}`) * 10;
+      const current_unit_price_rial = numFromInput(`v-cur-price-${id}`);
       await api(`/investments/${id}`, { method: 'PUT', body: JSON.stringify({ current_unit_price_rial }) });
       renderInvestments();
     });
@@ -843,7 +843,7 @@ async function renderInvestments() {
   document.querySelectorAll('[data-update]').forEach((b) => {
     b.addEventListener('click', async () => {
       const id = b.dataset.update;
-      const val = numFromInput(`v-cur-${id}`) * 10;
+      const val = numFromInput(`v-cur-${id}`);
       await api(`/investments/${id}`, { method: 'PUT', body: JSON.stringify({ current_value_rial: val }) });
       renderInvestments();
     });
@@ -903,7 +903,7 @@ async function renderDebts() {
         <strong>${d.person_name}</strong>
         <span class="badge ${d.status === 'settled' ? 'completed' : 'active'}">${d.status === 'settled' ? 'تسویه‌شده' : 'باز'}</span>
       </div>
-      <div class="privacy-target font-num" style="margin-top:6px;font-size:1.1rem;font-weight:700">${toman(d.amount_rial)} تومان</div>
+      <div class="privacy-target font-num" style="margin-top:6px;font-size:1.1rem;font-weight:700">${toman(d.amount_rial)} ریال</div>
       ${d.due_date ? `<div class="muted font-num" style="margin-top:4px">سررسید: ${new Date(d.due_date).toLocaleDateString('fa-IR')}</div>` : ''}
       ${d.note ? `<div class="muted" style="margin-top:4px">${d.note}</div>` : ''}
       <div class="row" style="gap:8px;margin-top:10px">
@@ -921,7 +921,7 @@ async function renderDebts() {
         <option value="owed_to_me">طلب دارم (باید بگیرم)</option>
       </select>
       <input id="d-person" placeholder="نام شخص" />
-      <input id="d-amount" type="text" inputmode="numeric" placeholder="مبلغ (تومان)" />
+      <input id="d-amount" type="text" inputmode="numeric" placeholder="مبلغ (ریال)" />
       <input id="d-due" type="date" placeholder="سررسید (اختیاری)" />
       <input id="d-note" placeholder="توضیح (اختیاری)" />
       <button class="action" id="d-add">ثبت</button>
@@ -943,7 +943,7 @@ async function renderDebts() {
       body: JSON.stringify({
         type: document.getElementById('d-type').value,
         person_name,
-        amount_rial: amountToman * 10,
+        amount_rial: amountToman,
         due_date: document.getElementById('d-due').value || null,
         note: document.getElementById('d-note').value || null,
       }),
@@ -975,7 +975,7 @@ async function renderTrash() {
     <strong>${title} (${items.length})</strong>
     ${items.length === 0 ? '<p class="muted">چیزی توی سطل نیست.</p>' : items.map((item) => `
       <div class="card row">
-        <span>${item.title || item.person_name || (item.amount_rial ? toman(item.amount_rial) + ' تومان' : 'مورد حذف‌شده')}</span>
+        <span>${item.title || item.person_name || (item.amount_rial ? toman(item.amount_rial) + ' ریال' : 'مورد حذف‌شده')}</span>
         <button class="action secondary" data-restore="${item.id}" data-restore-fn="${restoreFn}" style="width:auto">↩️ بازیابی</button>
       </div>
     `).join('')}
@@ -1016,7 +1016,7 @@ async function openManualModal() {
         <option value="expense">کسر از حساب</option>
         <option value="income">واریز به حساب</option>
       </select>
-      <input id="m-amount" type="text" inputmode="numeric" placeholder="مبلغ (تومان)" />
+      <input id="m-amount" type="text" inputmode="numeric" placeholder="مبلغ (ریال)" />
       <select id="m-category">${renderCatOptions('expense')}</select>
       ${otherAccountFieldHtml('m', accounts, null)}
       <input id="m-note" placeholder="توضیح (اختیاری)" />
@@ -1046,7 +1046,7 @@ async function openManualModal() {
     if (!account_id || !amountToman) return;
     await api('/transactions/manual', {
       method: 'POST',
-      body: JSON.stringify({ account_id, amount_rial: amountToman * 10, direction, category_id, note }),
+      body: JSON.stringify({ account_id, amount_rial: amountToman, direction, category_id, note }),
     });
     manualModal.hidden = true;
     const activeTab = [...tabButtons].find((b) => b.classList.contains('active'))?.dataset.tab;

@@ -13,7 +13,7 @@ const app = express();
 app.use(express.json());
 
 function toToman(rial) {
-  return Math.round(rial / 10);
+  return Math.round(rial);
 }
 
 function fmt(n) {
@@ -84,8 +84,8 @@ app.post('/webhook/sms', async (req, res) => {
 
     const sign = direction === 'income' ? '🟢' : '🔴';
     let message = direction === 'income'
-      ? `${sign} ${fmt(toToman(amount_rial))} تومان به ${account.display_name} واریز شد`
-      : `${sign} ${fmt(toToman(amount_rial))} تومان از ${account.display_name} کسر شد`;
+      ? `${sign} ${fmt(toToman(amount_rial))} ریال به ${account.display_name} واریز شد`
+      : `${sign} ${fmt(toToman(amount_rial))} ریال از ${account.display_name} کسر شد`;
 
     const actions = [];
     if (matches.length === 1) {
@@ -607,10 +607,10 @@ async function sendPeriodReport(title, sinceDate, untilDate) {
   const topCategory = Object.entries(byCategory).sort((a, b) => b[1] - a[1])[0];
 
   const lines = [
-    `⬇️ هزینه: ${fmt(toToman(expense))} تومان`,
-    `⬆️ درآمد: ${fmt(toToman(income))} تومان`,
+    `⬇️ هزینه: ${fmt(toToman(expense))} ریال`,
+    `⬆️ درآمد: ${fmt(toToman(income))} ریال`,
   ];
-  if (topCategory) lines.push(`بیشترین هزینه: ${topCategory[0]} (${fmt(toToman(topCategory[1]))} تومان)`);
+  if (topCategory) lines.push(`بیشترین هزینه: ${topCategory[0]} (${fmt(toToman(topCategory[1]))} ریال)`);
 
   await sendNtfy({ title, message: lines.join('\n'), priority: 4, tags: ['bar_chart'] });
 }
@@ -629,7 +629,7 @@ cron.schedule('0 8 * * *', async () => {
     for (const inst of dueRes.rows) {
       await sendNtfy({
         title: '📅 یادآور قسط',
-        message: `امروز موعد قسط «${inst.title}» است: ${fmt(toToman(inst.installment_amount_rial))} تومان (قسط ${inst.paid_count + 1} از ${inst.total_count})`,
+        message: `امروز موعد قسط «${inst.title}» است: ${fmt(toToman(inst.installment_amount_rial))} ریال (قسط ${inst.paid_count + 1} از ${inst.total_count})`,
         priority: 5,
         tags: ['warning', 'calendar'],
       });
@@ -681,7 +681,7 @@ cron.schedule('0 8 * * *', async () => {
     for (const acc of accountsRes.rows) {
       await sendNtfy({
         title: '🔴 موجودی کم',
-        message: `موجودی ${acc.display_name} از حد تعیین‌شده کمتره: ${fmt(toToman(acc.balance_rial))} تومان`,
+        message: `موجودی ${acc.display_name} از حد تعیین‌شده کمتره: ${fmt(toToman(acc.balance_rial))} ریال`,
         priority: 4,
         tags: ['warning'],
       });
@@ -695,7 +695,7 @@ cron.schedule('0 8 * * *', async () => {
       const label = debt.type === 'i_owe' ? `بدهی به ${debt.person_name}` : `طلب از ${debt.person_name}`;
       await sendNtfy({
         title: '💰 یادآور بدهی/طلب',
-        message: `${label}: ${fmt(toToman(debt.amount_rial))} تومان — سررسید گذشته یا امروزه`,
+        message: `${label}: ${fmt(toToman(debt.amount_rial))} ریال — سررسید گذشته یا امروزه`,
         priority: 4,
         tags: ['moneybag'],
       });
