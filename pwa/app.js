@@ -62,9 +62,10 @@ btnPrivacy.addEventListener('click', () => {
 async function updatePendingBadge() {
   try {
     const pending = await api('/transactions?status=pending');
-    const badge = document.getElementById('pending-badge');
-    badge.hidden = pending.length === 0;
-    badge.textContent = pending.length;
+    [document.getElementById('pending-badge'), document.getElementById('pending-badge-top')].forEach((badge) => {
+      badge.hidden = pending.length === 0;
+      badge.textContent = pending.length;
+    });
   } catch (e) { /* ignore */ }
 }
 
@@ -176,33 +177,82 @@ async function renderOverview() {
       </div>`;
   }
 
+  const maxFlow = Math.max(monthExpense, monthIncome, 1);
   html += `
     <div class="metric-grid">
       <div class="metric-card">
-        <div class="metric-label"><span>هزینه این ماه</span> ⬇️</div>
-        <div class="metric-value privacy-target" style="color:var(--red)">${toman(monthExpense)} <span class="muted" style="font-size:.7rem">تومان</span></div>
+        <div class="row"><span class="muted" style="font-size:.75rem">هزینه ماه</span> <span style="color:var(--red)">↗</span></div>
+        <div class="privacy-target font-num" style="color:var(--red);font-weight:800;font-size:1.1rem;margin-top:4px">-${toman(monthExpense)} <span class="muted" style="font-size:.65rem">ت</span></div>
+        <div class="mini-bar"><div class="mini-bar-fill" style="width:${Math.round(monthExpense / maxFlow * 100)}%;background:var(--red)"></div></div>
       </div>
       <div class="metric-card">
-        <div class="metric-label"><span>درآمد این ماه</span> ⬆️</div>
-        <div class="metric-value privacy-target" style="color:var(--green)">${toman(monthIncome)} <span class="muted" style="font-size:.7rem">تومان</span></div>
+        <div class="row"><span class="muted" style="font-size:.75rem">درآمد ماه</span> <span style="color:var(--green)">↙</span></div>
+        <div class="privacy-target font-num" style="color:var(--green);font-weight:800;font-size:1.1rem;margin-top:4px">+${toman(monthIncome)} <span class="muted" style="font-size:.65rem">ت</span></div>
+        <div class="mini-bar"><div class="mini-bar-fill" style="width:${Math.round(monthIncome / maxFlow * 100)}%;background:var(--green)"></div></div>
       </div>
     </div>
+  `;
+
+  html += `
+    <div class="card">
+      <div class="row">
+        <strong>حساب‌های بانکی</strong>
+        <button class="secondary" id="goto-accounts" style="width:auto;background:none;border:none;color:var(--gold);font-family:inherit;font-size:.75rem;cursor:pointer">مدیریت ‹</button>
+      </div>
+      <div class="accounts-grid" style="margin-top:10px">
+        ${accounts.map((a) => `
+          <div class="mini-bank-card">
+            <div class="mini-bank-icon"></div>
+            <div style="font-size:.85rem;font-weight:600">${a.display_name}</div>
+            <div class="muted font-num" style="font-size:.7rem;margin-top:2px">•••• •••• ••••</div>
+            <div class="privacy-target font-num" style="margin-top:8px;font-weight:700">${toman(a.balance_rial)} تومان</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+
+  const activeInstallmentsList = installments.filter((i) => i.status === 'active');
+  if (activeInstallmentsList.length > 0) {
+    html += `
+      <div class="card">
+        <div class="row">
+          <strong>اقساط فعال</strong>
+          <button class="secondary" id="goto-installments" style="width:auto;background:none;border:none;color:var(--gold);font-family:inherit;font-size:.75rem;cursor:pointer">همه ‹</button>
+        </div>
+        ${activeInstallmentsList.map((i) => {
+          const percent = Math.round((i.paid_count / i.total_count) * 100);
+          return `
+          <div style="margin-top:12px">
+            <div class="row">
+              <span style="font-size:.85rem;font-weight:600">${i.title}</span>
+              <span class="muted font-num" style="font-size:.7rem">قسط ${i.paid_count + 1}/${i.total_count}</span>
+            </div>
+            <div class="progress-track"><div class="progress-fill" style="width:${percent}%"></div></div>
+            <div class="row muted" style="font-size:.7rem;margin-top:2px">
+              <span>موعد: روز ${i.due_day_of_month} ماه</span>
+              <span class="font-num privacy-target">${toman(i.installment_amount_rial)} تومان</span>
+            </div>
+          </div>
+        `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  html += `
     <div class="card">
       <strong>هزینه‌ها به تفکیک دسته (این ماه)</strong>
       <div class="privacy-target" style="margin-top:10px">${donutChartHtml(chartData)}</div>
     </div>
   `;
 
-  html += accounts.map((a) => `
-    <div class="card row">
-      <span>${a.display_name}</span>
-      <strong class="privacy-target font-num">${toman(a.balance_rial)} تومان</strong>
-    </div>
-  `).join('');
-
   content.innerHTML = html;
+  document.getElementById('header-networth').textContent = toman(netWorth);
   const gotoBtn = document.getElementById('goto-pending');
   if (gotoBtn) gotoBtn.addEventListener('click', () => setActiveTab('pending'));
+  document.getElementById('goto-accounts')?.addEventListener('click', () => setActiveTab('accounts'));
+  document.getElementById('goto-installments')?.addEventListener('click', () => setActiveTab('installments'));
 }
 
 async function renderPending() {

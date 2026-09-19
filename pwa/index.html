@@ -72,7 +72,7 @@
     background: var(--surface-2); color: var(--muted); border: 1px solid var(--border-soft); border-radius: 12px;
     padding: 8px 14px; font-size: 0.8rem; white-space: nowrap; cursor: pointer; font-family: inherit;
   }
-  nav.top-nav button.active { background: var(--blue-dim); color: #93c5fd; border-color: rgba(59,130,246,.4); font-weight: 700; }
+  nav.top-nav button.active { background: none; color: var(--gold); border-color: transparent; border-bottom: 2px solid var(--gold); border-radius: 0; font-weight: 700; }
 
   .card {
     background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 10px;
@@ -94,7 +94,7 @@
     padding: 10px; font-size: 0.9rem; width: 100%; margin-top: 8px; font-family: inherit;
   }
   button.action {
-    background: var(--blue); color: white;
+    background: linear-gradient(135deg, var(--gold), var(--gold-dark)); color: #1c1203;
     border: none; cursor: pointer; margin-top: 12px; font-weight: 700;
   }
   button.action.pay { background: var(--green); color: #052e1f; }
@@ -126,7 +126,20 @@
   .badge.loss { background: rgba(248,113,113,.15); color: #fca5a5; }
 
   .progress-track { background: var(--surface-2); border-radius: 999px; height: 8px; margin-top: 8px; overflow: hidden; }
-  .progress-fill { height: 100%; background: linear-gradient(90deg, #1d4ed8, var(--blue)); }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, var(--gold-dark), var(--gold)); }
+  .mini-bar { height: 5px; border-radius: 999px; margin-top: 10px; overflow: hidden; background: var(--surface-2); }
+  .mini-bar-fill { height: 100%; }
+
+  .accounts-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  @media (min-width: 640px) { .accounts-grid { grid-template-columns: 1fr 1fr 1fr; } }
+  .mini-bank-card {
+    border-radius: 14px; padding: 14px; background: linear-gradient(135deg, #1e293b, #0f172a);
+    border: 1px solid var(--border);
+  }
+  .mini-bank-icon {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--gold), var(--gold-dark)); margin-bottom: 10px;
+  }
 
   #btn-privacy {
     background: var(--surface-2); border: 1px solid var(--border-soft); color: var(--muted);
@@ -172,7 +185,7 @@
     background: var(--surface); border: 1px solid var(--border-soft); color: var(--text);
     font-size: 0.8rem; font-weight: 600; font-family: inherit; text-align: right;
   }
-  .more-item.active { background: var(--blue-dim); border-color: rgba(59,130,246,.4); color: #93c5fd; }
+  .more-item.active { background: rgba(245,158,11,.15); border-color: rgba(245,158,11,.4); color: var(--gold); }
 
   #fab { display: none; }
   #manual-modal, #sms-modal {
@@ -187,17 +200,23 @@
 </style>
 </head>
 <body>
-  <div class="row" style="margin-bottom:14px;flex-wrap:wrap;gap:8px">
-    <h1 style="margin:0">کیف پول شخصی</h1>
-    <div class="row" style="gap:8px;width:auto">
-      <button id="btn-sms-sim" style="background:rgba(99,102,241,.15);color:#a5b4fc;border:1px solid rgba(99,102,241,.4);border-radius:10px;padding:8px 12px;font-size:.75rem;font-weight:700;font-family:inherit;cursor:pointer">🧪 تست پیامک</button>
-      <button id="btn-privacy">👁 محو کردن ارقام</button>
+  <div class="row" style="margin-bottom:14px;flex-wrap:wrap;gap:10px;align-items:flex-start">
+    <div class="row" style="width:auto;gap:6px">
+      <button id="btn-sms-sim" style="background:var(--surface-2);color:var(--muted);border:1px solid var(--border-soft);border-radius:10px;padding:8px 12px;font-size:.75rem;font-weight:700;font-family:inherit;cursor:pointer">💬 تست پیامک</button>
+      <button id="btn-privacy" style="width:36px;height:36px;padding:0;border-radius:50%;background:var(--surface-2);border:1px solid var(--border-soft);color:var(--muted);font-size:1rem">👁</button>
+    </div>
+    <div class="row" style="width:auto;gap:10px;margin-right:auto">
+      <div style="text-align:left">
+        <h1 style="margin:0">کیف پول شخصی</h1>
+        <div class="muted">دارایی خالص: <span id="header-networth" class="privacy-target font-num" style="color:var(--gold);font-weight:700">—</span> تومان</div>
+      </div>
+      <div style="width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,var(--gold),var(--gold-dark));flex:0 0 auto"></div>
     </div>
   </div>
 
   <nav class="top-nav">
     <button data-tab="overview" class="active">داشبورد</button>
-    <button data-tab="pending">در انتظار</button>
+    <button data-tab="pending">در انتظار <span id="pending-badge-top" class="nav-badge" hidden style="position:static;margin-right:4px">0</span></button>
     <button data-tab="transactions">تراکنش‌ها</button>
     <button data-tab="accounts">حساب‌ها</button>
     <button data-tab="installments">اقساط</button>
