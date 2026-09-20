@@ -881,6 +881,7 @@ async function renderInvestments() {
         <div class="metric-value privacy-target font-num">${toman(totalCurrent)}</div>
       </div>
     </div>
+    <button class="action secondary" id="refresh-prices">🔄 بروزرسانی خودکار قیمت دلار/طلا/سکه</button>
     <div class="card">
       <strong>افزودن سرمایه‌گذاری</strong>
       <input id="v-title" placeholder="عنوان (مثلا: طلای 18 عیار)" />
@@ -930,6 +931,14 @@ async function renderInvestments() {
   items.forEach((v) => {
     wireThousandsInput(`v-cur-${v.id}`);
     wireThousandsInput(`v-cur-price-${v.id}`);
+  });
+
+  document.getElementById('refresh-prices').addEventListener('click', async (e) => {
+    e.target.textContent = '⏳ در حال بروزرسانی...';
+    try {
+      await api('/investments/refresh-prices', { method: 'POST' });
+    } catch (err) { /* endpoint may not be configured yet */ }
+    renderInvestments();
   });
 
   const vType = document.getElementById('v-type');

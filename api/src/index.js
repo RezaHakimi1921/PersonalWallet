@@ -756,5 +756,51 @@ cron.schedule('0 8 * * 6', async () => {
   }
 });
 
+// ---------- Auto-update gold/dollar/coin investment prices from BrsApi (free market rates) ----------
+// Requires BRSAPI_KEY in .env; get a free key at https://brsapi.ir/tsetmc-exchange-free-bourse-api-key-request/
+const ASSET_TYPE_TO_BRSAPI_SYMBOL = {
+  dollar: 'USD',
+  gold: 'IR_GOLD_18K',
+  coin: 'IR_COIN_EMAMI',
+};
+
+async function updateInvestmentPrices() {
+  if (!process.env.BRSAPI_KEY) return;
+  try {
+    const res = await fetch(`https://BrsApi.ir/Api/Market/Gold_Currency.php?key=${process.env.BRSAPI_KEY}`);
+    const data = await res.json();
+    const allItems = [...(data.gold || []), ...(data.currency || [])];
+    const priceBySymbol = {};
+    allItems.forEach((item) => { priceBySymbol[item.symbol] = item.price; });
+
+    const investmentsRes = await pool.query(
+      `SELECT * FROM investments WHERE asset_type IN ('dollar','gold','coin') AND quantity IS NOT NULL`
+    );
+    for (const inv of investmentsRes.rows) {
+      const symbol = ASSET_TYPE_TO_BRSAPI_SYMBOL[inv.asset_type];
+      const tomanPrice = priceBySymbol[symbol];
+      if (!tomanPrice) continue;
+      const currentUnitPriceRial = Math.round(Number(tomanPrice) * 10);
+      const currentValueRial = Math.round(Number(inv.quantity) * currentUnitPriceRial);
+      await pool.query(
+        `UPDATE investments SET current_unit_price_rial = $1, current_value_rial = $2, updated_at = now() WHERE id = $3`,
+        [currentUnitPriceRial, currentValueRial, inv.id]
+      );
+    }
+  } catch (err) {
+    console.error('investment price update error', err);
+  }
+}
+
+// Every 6 hours
+cron.schedule('0 */6 * * *', updateInvestmentPrices);
+
+app.post('/investments/refresh-prices', async (req, res) => {
+  if (!process.env.BRSAPI_KEY) return res.status(400).json({ error: 'BRSAPI_KEY not configured' });
+  await updateInvestmentPrices();
+  const result = await pool.query('SELECT * FROM investments ORDER BY created_at DESC');
+  res.json(result.rows);
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`api listening on ${PORT}`));
