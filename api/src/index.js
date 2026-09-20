@@ -30,7 +30,7 @@ async function checkLowBalance(accountId) {
     for (const acc of res.rows) {
       await sendNtfy({
         title: '🔴 موجودی کم',
-        message: `موجودی ${acc.display_name} از حد تعیین‌شده کمتره: ${fmt(toToman(acc.balance_rial))} ریال`,
+        message: `حساب ${acc.display_name} از حد هشدار موجودی که تعیین کردی پایین‌تر رفته.`,
         priority: 4,
         tags: ['warning'],
       });
@@ -721,7 +721,7 @@ cron.schedule('0 8 * * *', async () => {
     for (const acc of accountsRes.rows) {
       await sendNtfy({
         title: '🔴 موجودی کم',
-        message: `موجودی ${acc.display_name} از حد تعیین‌شده کمتره: ${fmt(toToman(acc.balance_rial))} ریال`,
+        message: `حساب ${acc.display_name} از حد هشدار موجودی که تعیین کردی پایین‌تر رفته.`,
         priority: 4,
         tags: ['warning'],
       });
