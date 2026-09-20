@@ -59,19 +59,15 @@ app.post('/webhook/sms', async (req, res) => {
     const parsed = parseSms(bank, text);
 
     if (!parsed) {
-      // dead-letter: could not parse, still store raw text so nothing is lost
-      const insertRes = await client.query(
-        `INSERT INTO transactions (account_id, amount_rial, direction, raw_text, status)
-         VALUES ($1, 0, 'expense', $2, 'pending') RETURNING id`,
-        [account.id, text]
-      );
+      // Not a transaction SMS (or couldn't be parsed) -- just alert with the raw text
+      // instead of creating a fake zero-amount transaction that clutters the pending list.
       await sendNtfy({
         title: `⚠️ پیامک ${account.display_name} پارس نشد`,
         message: text,
         priority: 4,
         tags: ['warning'],
       });
-      return res.json({ ok: true, parsed: false, transaction_id: insertRes.rows[0].id });
+      return res.json({ ok: true, parsed: false });
     }
 
     const { amount_rial, direction, balance_after_rial } = parsed;

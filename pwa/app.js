@@ -393,6 +393,35 @@ function wireTransferField(catSelectId, otherAccountSelectId, cats) {
   });
 }
 
+const LOAN_CATEGORY_NAME = 'قرض';
+
+function loanPersonFieldHtml(idSuffix) {
+  return `<input id="loan-person-${idSuffix}" placeholder="این قرض بود؟ نام طرف حساب رو بنویس" hidden />`;
+}
+
+function wireLoanField(catSelectId, loanPersonInputId, cats) {
+  const catSelect = document.getElementById(catSelectId);
+  const loanInput = document.getElementById(loanPersonInputId);
+  catSelect.addEventListener('change', () => {
+    const selected = cats.find((c) => String(c.id) === catSelect.value);
+    loanInput.hidden = !(selected && selected.name === LOAN_CATEGORY_NAME);
+  });
+}
+
+// After confirming a transaction tagged as a loan, also record it in the debts module.
+async function maybeCreateLoanDebt(loanInputId, direction, amount_rial) {
+  const loanInput = document.getElementById(loanInputId);
+  if (loanInput.hidden || !loanInput.value) return;
+  await api('/debts', {
+    method: 'POST',
+    body: JSON.stringify({
+      type: direction === 'expense' ? 'owed_to_me' : 'i_owe',
+      person_name: loanInput.value,
+      amount_rial,
+    }),
+  });
+}
+
 const TX_PAGE_SIZE = 10;
 let txPage = 1;
 
@@ -503,6 +532,7 @@ async function openEditTxModal(t) {
       </select>
       <input id="e-amount" type="text" inputmode="numeric" value="${toman(t.amount_rial)}" />
       <select id="e-category">${renderCatOptions(t.direction)}</select>
+      ${loanPersonFieldHtml('e')}
       <input id="e-note" placeholder="توضیح" value="${t.note || ''}" />
       <input id="e-tags" placeholder="تگ (با کاما جدا کن)" value="${t.tags || ''}" />
       <button class="action" id="e-save">ذخیره</button>
@@ -515,8 +545,10 @@ async function openEditTxModal(t) {
   document.getElementById('e-direction').addEventListener('change', (e) => {
     document.getElementById('e-category').innerHTML = renderCatOptions(e.target.value);
   });
+  wireLoanField('e-category', 'loan-person-e', cats);
   document.getElementById('e-cancel').addEventListener('click', () => { manualModal.hidden = true; });
   document.getElementById('e-save').addEventListener('click', async () => {
+    await maybeCreateLoanDebt('loan-person-e', document.getElementById('e-direction').value, numFromInput('e-amount'));
     await api(`/transactions/${t.id}/edit`, {
       method: 'PUT',
       body: JSON.stringify({
@@ -551,6 +583,7 @@ function txCard(t, cats, editable, accounts) {
       ${editable ? `
         <select id="cat-${t.id}"><option value="">انتخاب دسته‌بندی...</option>${options}</select>
         ${otherAccountFieldHtml(t.id, accounts, t.account_id)}
+        ${loanPersonFieldHtml(t.id)}
         <input id="note-${t.id}" placeholder="توضیح (اختیاری)" />
         <input id="tags-${t.id}" placeholder="تگ (مثلا سفر، کار — با کاما جدا کن)" />
         <div class="row" style="gap:8px">
@@ -566,6 +599,7 @@ function wireTxCard(t, cats, accounts) {
   const btn = document.getElementById(`confirm-${t.id}`);
   if (!btn) return;
   wireTransferField(`cat-${t.id}`, `other-account-${t.id}`, cats);
+  wireLoanField(`cat-${t.id}`, `loan-person-${t.id}`, cats);
   btn.addEventListener('click', async () => {
     const category_id = document.getElementById(`cat-${t.id}`).value || null;
     let note = document.getElementById(`note-${t.id}`).value || null;
@@ -575,6 +609,7 @@ function wireTxCard(t, cats, accounts) {
       note = `حساب مقابل: ${otherAccount.display_name}${note ? ' — ' + note : ''}`;
     }
     const tags = document.getElementById(`tags-${t.id}`).value || null;
+    await maybeCreateLoanDebt(`loan-person-${t.id}`, t.direction, t.amount_rial);
     await api(`/transactions/${t.id}/confirm`, { method: 'POST', body: JSON.stringify({ category_id, note, tags }) });
     document.getElementById(`tx-${t.id}`).remove();
   });
@@ -1261,6 +1296,7 @@ async function openManualModal() {
       <input id="m-amount" type="text" inputmode="numeric" placeholder="مبلغ (ریال)" />
       <select id="m-category">${renderCatOptions('expense')}</select>
       ${otherAccountFieldHtml('m', accounts, null)}
+      ${loanPersonFieldHtml('m')}
       <input id="m-note" placeholder="توضیح (اختیاری)" />
       <input id="m-tags" placeholder="تگ (اختیاری، با کاما جدا کن)" />
       <button class="action" id="m-save">ثبت</button>
@@ -1274,6 +1310,7 @@ async function openManualModal() {
     document.getElementById('m-category').innerHTML = renderCatOptions(e.target.value);
   });
   wireTransferField('m-category', 'other-account-m', cats);
+  wireLoanField('m-category', 'loan-person-m', cats);
   document.getElementById('m-cancel').addEventListener('click', () => { manualModal.hidden = true; });
   document.getElementById('m-save').addEventListener('click', async () => {
     const account_id = document.getElementById('m-account').value;
@@ -1288,6 +1325,7 @@ async function openManualModal() {
     }
     if (!account_id || !amountToman) return;
     const tags = document.getElementById('m-tags').value || null;
+    await maybeCreateLoanDebt('loan-person-m', direction, amountToman);
     await api('/transactions/manual', {
       method: 'POST',
       body: JSON.stringify({ account_id, amount_rial: amountToman, direction, category_id, note, tags }),
