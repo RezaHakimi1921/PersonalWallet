@@ -767,7 +767,13 @@ const ASSET_TYPE_TO_BRSAPI_SYMBOL = {
 async function updateInvestmentPrices() {
   if (!process.env.BRSAPI_KEY) return;
   try {
-    const res = await fetch(`https://BrsApi.ir/Api/Market/Gold_Currency.php?key=${process.env.BRSAPI_KEY}`);
+    // BrsApi's firewall blocks default runtime User-Agents (Node/Python/Go) and can
+    // temporarily ban the IP; a real browser User-Agent is required.
+    const res = await fetch(`https://BrsApi.ir/Api/Market/Gold_Currency.php?key=${process.env.BRSAPI_KEY}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+      },
+    });
     const data = await res.json();
     const allItems = [...(data.gold || []), ...(data.currency || [])];
     const priceBySymbol = {};

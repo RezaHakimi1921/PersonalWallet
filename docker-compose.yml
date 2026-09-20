@@ -23,6 +23,7 @@ services:
       NTFY_URL: "https://ntfy.sh"
       NTFY_TOPIC: "${NTFY_TOPIC}"
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL}"
+      BRSAPI_KEY: "${BRSAPI_KEY}"
       TZ: "Asia/Tehran"
     depends_on:
       db:
