@@ -20,6 +20,26 @@ function fmt(n) {
   return n.toLocaleString('en-US');
 }
 
+// Fires immediately whenever a balance changes, instead of waiting for the daily cron.
+async function checkLowBalance(accountId) {
+  try {
+    const res = await pool.query(
+      'SELECT * FROM accounts WHERE id = $1 AND low_balance_threshold_rial IS NOT NULL AND balance_rial < low_balance_threshold_rial',
+      [accountId]
+    );
+    for (const acc of res.rows) {
+      await sendNtfy({
+        title: '🔴 موجودی کم',
+        message: `موجودی ${acc.display_name} از حد تعیین‌شده کمتره: ${fmt(toToman(acc.balance_rial))} ریال`,
+        priority: 4,
+        tags: ['warning'],
+      });
+    }
+  } catch (err) {
+    console.error('low balance check error', err);
+  }
+}
+
 // ---------- Webhook: incoming bank SMS ----------
 app.post('/webhook/sms', async (req, res) => {
   // iOS Shortcuts auto-capitalizes single-word field names (e.g. "Text"), so match keys case-insensitively.
@@ -63,6 +83,7 @@ app.post('/webhook/sms', async (req, res) => {
         : currentBalance - amount_rial;
 
     await client.query('UPDATE accounts SET balance_rial = $1 WHERE id = $2', [newBalance, account.id]);
+    checkLowBalance(account.id);
 
     const txRes = await client.query(
       `INSERT INTO transactions (account_id, amount_rial, direction, balance_after_rial, raw_text, status)
@@ -189,6 +210,7 @@ app.post('/transactions/manual', async (req, res) => {
       ? account.balance_rial + Number(amount_rial)
       : account.balance_rial - Number(amount_rial);
     await client.query('UPDATE accounts SET balance_rial = $1 WHERE id = $2', [newBalance, account_id]);
+    checkLowBalance(account_id);
 
     const txRes = await client.query(
       `INSERT INTO transactions (account_id, amount_rial, direction, balance_after_rial, raw_text, status, category_id, note, tags)
@@ -285,6 +307,7 @@ app.put('/transactions/:id/edit', async (req, res) => {
       ? targetCurrentBalance + newAmount
       : targetCurrentBalance - newAmount;
     await client.query('UPDATE accounts SET balance_rial = $1 WHERE id = $2', [newBalance, newAccountId]);
+    checkLowBalance(newAccountId);
 
     const result = await client.query(
       `UPDATE transactions SET amount_rial = $1, direction = $2, account_id = $3, category_id = $4, note = COALESCE($5, note), balance_after_rial = $6, tags = COALESCE($7, tags)
@@ -380,6 +403,7 @@ app.put('/accounts/:id', async (req, res) => {
     [display_name ?? null, balance_rial ?? null, card_number ?? null, account_number ?? null, iban ?? null, cvv2 ?? null, expiry ?? null, low_balance_threshold_rial ?? null, id]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
+  if (balance_rial != null || low_balance_threshold_rial != null) await checkLowBalance(id);
   res.json(result.rows[0]);
 });
 

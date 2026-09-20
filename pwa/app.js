@@ -85,6 +85,17 @@ const Jalali = (() => {
 })();
 const JALALI_MONTH_NAMES = ['فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور', 'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'];
 
+// Reliable Jalali date formatting -- Intl's 'fa-IR' locale doesn't consistently
+// render the Persian calendar across browsers/webviews, so we do it ourselves.
+function formatJalaliDate(dateObj) {
+  const j = Jalali.toJalaali(dateObj.getFullYear(), dateObj.getMonth() + 1, dateObj.getDate());
+  return `${j.jd} ${JALALI_MONTH_NAMES[j.jm - 1]} ${j.jy}`;
+}
+function formatJalaliDateTime(dateObj) {
+  const time = dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  return `${formatJalaliDate(dateObj)} - ${time}`;
+}
+
 function toman(rial) {
   return Math.round(rial).toLocaleString('en-US');
 }
@@ -200,9 +211,9 @@ function donutChartHtml(chartData) {
 }
 
 async function renderOverview() {
-  const [accounts, pending, installments, transactions, investments, categories] = await Promise.all([
+  const [accounts, pending, installments, transactions, investments, categories, debts] = await Promise.all([
     api('/accounts'), api('/transactions?status=pending'), api('/installments'), api('/transactions'),
-    api('/investments'), api('/categories'),
+    api('/investments'), api('/categories'), api('/debts'),
   ]);
 
   const totalCash = accounts.reduce((sum, a) => sum + Number(a.balance_rial), 0);
@@ -211,7 +222,10 @@ async function renderOverview() {
   const remainingDebt = activeInstallments.reduce(
     (sum, i) => sum + i.installment_amount_rial * (i.total_count - i.paid_count), 0
   );
-  const netWorth = totalCash + totalInvestments - remainingDebt;
+  const openDebts = debts.filter((d) => d.status === 'open');
+  const totalIOwe = openDebts.filter((d) => d.type === 'i_owe').reduce((s, d) => s + Number(d.amount_rial), 0);
+  const totalOwedToMe = openDebts.filter((d) => d.type === 'owed_to_me').reduce((s, d) => s + Number(d.amount_rial), 0);
+  const netWorth = totalCash + totalInvestments + totalOwedToMe - remainingDebt - totalIOwe;
   const now = new Date();
   const thisMonthTx = transactions.filter((t) => {
     const d = new Date(t.created_at);
@@ -237,8 +251,8 @@ async function renderOverview() {
     </div>
     <div class="metric-grid" style="grid-template-columns:1fr 1fr 1fr">
       <div class="metric-card" style="background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.25)">
-        <div class="metric-label" style="font-size:.7rem">بدهی</div>
-        <div class="privacy-target font-num" style="color:var(--red);font-weight:700;margin-top:4px">${toman(remainingDebt)}</div>
+        <div class="metric-label" style="font-size:.7rem">بدهی (قسط + بدهی شخصی)</div>
+        <div class="privacy-target font-num" style="color:var(--red);font-weight:700;margin-top:4px">${toman(remainingDebt + totalIOwe)}</div>
       </div>
       <div class="metric-card">
         <div class="metric-label" style="font-size:.7rem">سرمایه</div>
@@ -249,6 +263,12 @@ async function renderOverview() {
         <div class="privacy-target font-num" style="color:var(--green);font-weight:700;margin-top:4px">${toman(totalCash)}</div>
       </div>
     </div>
+    ${totalOwedToMe > 0 ? `
+      <div class="card row">
+        <span class="muted">طلب از دیگران</span>
+        <strong class="privacy-target font-num" style="color:var(--green)">${toman(totalOwedToMe)} ریال</strong>
+      </div>
+    ` : ''}
   `;
   if (pending.length > 0) {
     html += `
@@ -427,7 +447,7 @@ async function renderTransactions() {
           <span class="${t.direction === 'income' ? 'amount-income' : 'amount-expense'} font-num">
             ${t.direction === 'income' ? '+' : '-'}${toman(t.amount_rial)} ریال
           </span>
-          <span class="muted">${new Date(t.created_at).toLocaleString('fa-IR')}</span>
+          <span class="muted font-num">${formatJalaliDateTime(new Date(t.created_at))}</span>
         </div>
         <div class="row">
           <div class="muted">${t.account_name} · ${t.category_name || 'بدون دسته'}${t.note ? ' · ' + t.note : ''}${t.tags ? ' · 🏷 ' + t.tags : ''}</div>
@@ -1117,7 +1137,7 @@ async function renderDebts() {
         <span class="badge ${d.status === 'settled' ? 'completed' : 'active'}">${d.status === 'settled' ? 'تسویه‌شده' : 'باز'}</span>
       </div>
       <div class="privacy-target font-num" style="margin-top:6px;font-size:1.1rem;font-weight:700">${toman(d.amount_rial)} ریال</div>
-      ${d.due_date ? `<div class="muted font-num" style="margin-top:4px">سررسید: ${new Date(d.due_date).toLocaleDateString('fa-IR')}</div>` : ''}
+      ${d.due_date ? `<div class="muted font-num" style="margin-top:4px">سررسید: ${formatJalaliDate(new Date(d.due_date))}</div>` : ''}
       ${d.note ? `<div class="muted" style="margin-top:4px">${d.note}</div>` : ''}
       <div class="row" style="gap:8px;margin-top:10px">
         ${d.status === 'open' ? `<button class="action" data-settle="${d.id}" style="flex:1">✅ تسویه شد</button>` : ''}
