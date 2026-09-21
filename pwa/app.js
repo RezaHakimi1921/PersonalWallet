@@ -114,6 +114,30 @@ function numFromInput(id) {
   return Number((document.getElementById(id).value || '').replace(/,/g, ''));
 }
 
+// Wraps a button's click handler so a second tap during the request is ignored,
+// and the button visibly shows it's working (prevents duplicate submits like
+// double-created debts/transactions from repeated taps).
+function onClickLocked(button, handler) {
+  button.addEventListener('click', async (e) => {
+    if (button.disabled) return;
+    const original = button.textContent;
+    button.disabled = true;
+    button.dataset.prevOpacity = button.style.opacity || '';
+    button.style.opacity = '.6';
+    button.textContent = '⏳ در حال پردازش...';
+    try {
+      await handler(e);
+    } finally {
+      // Skip restoring if the button (or its container) was removed by a re-render.
+      if (document.body.contains(button)) {
+        button.disabled = false;
+        button.style.opacity = button.dataset.prevOpacity;
+        button.textContent = original;
+      }
+    }
+  });
+}
+
 async function api(path, opts) {
   const res = await fetch(API + path, {
     headers: { 'Content-Type': 'application/json' },
@@ -139,19 +163,49 @@ moreSheet.addEventListener('click', (e) => { if (e.target === moreSheet) moreShe
 
 const PRIVACY_KEY = 'pw-privacy-mode';
 const btnPrivacy = document.getElementById('btn-privacy');
+let privacyOn = false;
+
+// Masks only the digit groups inside an element (walking all descendant text
+// nodes), so surrounding labels like "ریال" and the element's own color stay
+// visible — only the actual numbers turn into dots.
+function walkTextNodes(el) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  let n;
+  while ((n = walker.nextNode())) nodes.push(n);
+  return nodes;
+}
+function maskEl(el) {
+  if (el.dataset.masked === '1') return;
+  el.dataset.masked = '1';
+  const nodes = walkTextNodes(el);
+  el.__origTexts = nodes.map((n) => n.textContent);
+  nodes.forEach((n) => { n.textContent = n.textContent.replace(/[\d,]+/g, '••••'); });
+}
+function unmaskEl(el) {
+  if (el.dataset.masked !== '1') return;
+  delete el.dataset.masked;
+  const nodes = walkTextNodes(el);
+  nodes.forEach((n, i) => { if (el.__origTexts && el.__origTexts[i] !== undefined) n.textContent = el.__origTexts[i]; });
+  delete el.__origTexts;
+}
 function applyPrivacyMode(on) {
-  // CSS rule `body.privacy-on .privacy-target` handles the blur, so it applies
-  // instantly to any content rendered later too — no re-query/flash on tab switch.
-  document.body.classList.toggle('privacy-on', on);
+  privacyOn = on;
+  document.querySelectorAll('.privacy-target').forEach(on ? maskEl : unmaskEl);
   btnPrivacy.classList.toggle('active', on);
   btnPrivacy.textContent = on ? '🙈' : '🐵';
   btnPrivacy.title = on ? 'نمایش ارقام' : 'محو کردن ارقام';
 }
 btnPrivacy.addEventListener('click', () => {
-  const on = !btnPrivacy.classList.contains('active');
+  const on = !privacyOn;
   localStorage.setItem(PRIVACY_KEY, on ? '1' : '0');
   applyPrivacyMode(on);
 });
+// Mask any newly-rendered .privacy-target elements immediately, before paint,
+// so switching tabs never flashes real numbers even for a frame.
+new MutationObserver(() => {
+  if (privacyOn) document.querySelectorAll('.privacy-target:not([data-masked="1"])').forEach(maskEl);
+}).observe(content, { childList: true, subtree: true });
 
 async function updatePendingBadge() {
   try {
@@ -179,8 +233,6 @@ async function render(tab) {
     if (tab === 'trash') return renderTrash();
   } catch (e) {
     content.innerHTML = '<p class="muted">خطا در بارگذاری اطلاعات</p>';
-  } finally {
-    applyPrivacyMode(btnPrivacy.classList.contains('active'));
   }
 }
 
@@ -225,14 +277,13 @@ async function renderOverview() {
   const openDebts = debts.filter((d) => d.status === 'open');
   const totalIOwe = openDebts.filter((d) => d.type === 'i_owe').reduce((s, d) => s + Number(d.amount_rial), 0);
   const totalOwedToMe = openDebts.filter((d) => d.type === 'owed_to_me').reduce((s, d) => s + Number(d.amount_rial), 0);
-  const netWorth = totalCash + totalInvestments + totalOwedToMe - remainingDebt - totalIOwe;
   const now = new Date();
   const thisMonthTx = transactions.filter((t) => {
     const d = new Date(t.created_at);
     return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && t.status === 'confirmed';
   });
   // Transfers between own accounts are neither real income nor real expense.
-  const realFlowTx = thisMonthTx.filter((t) => t.category_name !== TRANSFER_CATEGORY_NAME);
+  const realFlowTx = thisMonthTx.filter((t) => !isNonFlowCategory(t.category_name));
   const monthExpense = realFlowTx.filter((t) => t.direction === 'expense').reduce((s, t) => s + Number(t.amount_rial), 0);
   const monthIncome = realFlowTx.filter((t) => t.direction === 'income').reduce((s, t) => s + Number(t.amount_rial), 0);
 
@@ -245,10 +296,6 @@ async function renderOverview() {
   const chartData = Object.entries(expenseByCategory).map(([name, value]) => ({ name, value: Number(value) }));
 
   let html = `
-    <div class="card" style="text-align:center">
-      <div class="muted">دارایی خالص شما</div>
-      <div class="privacy-target font-num" style="font-size:1.6rem;font-weight:800;margin-top:6px">${toman(netWorth)} <span class="muted" style="font-size:.8rem">ریال</span></div>
-    </div>
     <div class="metric-grid" style="grid-template-columns:1fr 1fr 1fr">
       <div class="metric-card" style="background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.25)">
         <div class="metric-label" style="font-size:.7rem">بدهی (قسط + بدهی شخصی)</div>
@@ -354,7 +401,6 @@ async function renderOverview() {
   `;
 
   content.innerHTML = html;
-  document.getElementById('header-networth').textContent = toman(netWorth);
   wireCopyFields();
   const gotoBtn = document.getElementById('goto-pending');
   if (gotoBtn) gotoBtn.addEventListener('click', () => setActiveTab('pending'));
@@ -375,6 +421,9 @@ async function renderPending() {
 }
 
 const TRANSFER_CATEGORY_NAME = 'انتقال وجه بین حساب';
+function isNonFlowCategory(name) {
+  return name === TRANSFER_CATEGORY_NAME || name === 'قرض';
+}
 
 function otherAccountFieldHtml(idSuffix, accounts, currentAccountId) {
   const options = accounts
@@ -547,7 +596,7 @@ async function openEditTxModal(t) {
   });
   wireLoanField('e-category', 'loan-person-e', cats);
   document.getElementById('e-cancel').addEventListener('click', () => { manualModal.hidden = true; });
-  document.getElementById('e-save').addEventListener('click', async () => {
+  onClickLocked(document.getElementById('e-save'), async () => {
     await maybeCreateLoanDebt('loan-person-e', document.getElementById('e-direction').value, numFromInput('e-amount'));
     await api(`/transactions/${t.id}/edit`, {
       method: 'PUT',
@@ -600,7 +649,7 @@ function wireTxCard(t, cats, accounts) {
   if (!btn) return;
   wireTransferField(`cat-${t.id}`, `other-account-${t.id}`, cats);
   wireLoanField(`cat-${t.id}`, `loan-person-${t.id}`, cats);
-  btn.addEventListener('click', async () => {
+  onClickLocked(btn, async () => {
     const category_id = document.getElementById(`cat-${t.id}`).value || null;
     let note = document.getElementById(`note-${t.id}`).value || null;
     const otherAccountSelect = document.getElementById(`other-account-${t.id}`);
@@ -613,7 +662,7 @@ function wireTxCard(t, cats, accounts) {
     await api(`/transactions/${t.id}/confirm`, { method: 'POST', body: JSON.stringify({ category_id, note, tags }) });
     document.getElementById(`tx-${t.id}`).remove();
   });
-  document.getElementById(`delete-${t.id}`).addEventListener('click', async () => {
+  onClickLocked(document.getElementById(`delete-${t.id}`), async () => {
     if (!confirm('این تراکنش حذف شود؟ موجودی حساب به حالت قبل برمی‌گردد.')) return;
     await api(`/transactions/${t.id}`, { method: 'DELETE' });
     document.getElementById(`tx-${t.id}`).remove();
@@ -666,7 +715,7 @@ function cardInfoHtml(a) {
 
 function wireCopyFields() {
   document.querySelectorAll('[data-copy]').forEach((el) => {
-    el.addEventListener('click', async () => {
+    onClickLocked(el, async () => {
       const valueEl = el.querySelector('.copy-value');
       const original = valueEl.textContent;
       try {
@@ -770,7 +819,7 @@ function openAccountModal(account) {
   wireExpiryInput('acc-expiry');
 
   document.getElementById('acc-cancel').addEventListener('click', () => { manualModal.hidden = true; });
-  document.getElementById('acc-save').addEventListener('click', async () => {
+  onClickLocked(document.getElementById('acc-save'), async () => {
     const display_name = document.getElementById('acc-name').value;
     if (!display_name) return;
     const body = {
@@ -840,7 +889,7 @@ async function renderInstallments() {
   wireThousandsInput('i-count');
   wireThousandsInput('i-day');
 
-  document.getElementById('i-add').addEventListener('click', async () => {
+  onClickLocked(document.getElementById('i-add'), async () => {
     const title = document.getElementById('i-title').value;
     const type = document.getElementById('i-type').value;
     const installment_amount_toman = numFromInput('i-amount');
@@ -859,7 +908,7 @@ async function renderInstallments() {
   });
 
   document.querySelectorAll('[data-pay]').forEach((b) => {
-    b.addEventListener('click', async () => {
+    onClickLocked(b, async () => {
       if (!confirm('پرداخت این قسط ثبت شود؟ این عملیات قابل بازگشت نیست.')) return;
       await api(`/installments/${b.dataset.pay}/pay`, { method: 'POST' });
       renderInstallments();
@@ -867,7 +916,7 @@ async function renderInstallments() {
   });
 
   document.querySelectorAll('[data-delete-inst]').forEach((b) => {
-    b.addEventListener('click', async () => {
+    onClickLocked(b, async () => {
       if (!confirm('این قسط/وام کاملاً حذف شود؟')) return;
       await api(`/installments/${b.dataset.deleteInst}`, { method: 'DELETE' });
       renderInstallments();
@@ -875,7 +924,7 @@ async function renderInstallments() {
   });
 
   document.querySelectorAll('[data-edit-inst]').forEach((b) => {
-    b.addEventListener('click', async () => {
+    onClickLocked(b, async () => {
       const item = items.find((i) => i.id === Number(b.dataset.editInst));
       const newTitle = prompt('عنوان:', item.title);
       if (newTitle == null) return;
@@ -900,12 +949,28 @@ async function renderInstallments() {
 }
 
 async function renderInvestments() {
-  const items = await api('/investments');
+  const [items, accounts, installments, debts] = await Promise.all([
+    api('/investments'), api('/accounts'), api('/installments'), api('/debts'),
+  ]);
   const totalInvested = items.reduce((s, v) => s + Number(v.invested_amount_rial), 0);
   const totalCurrent = items.reduce((s, v) => s + Number(v.current_value_rial), 0);
   const totalGain = totalCurrent - totalInvested;
 
+  const totalCash = accounts.reduce((s, a) => s + Number(a.balance_rial), 0);
+  const activeInstallments = installments.filter((i) => i.status === 'active');
+  const remainingInstallmentDebt = activeInstallments.reduce(
+    (sum, i) => sum + i.installment_amount_rial * (i.total_count - i.paid_count), 0
+  );
+  const openDebts = debts.filter((d) => d.status === 'open');
+  const totalIOwe = openDebts.filter((d) => d.type === 'i_owe').reduce((s, d) => s + Number(d.amount_rial), 0);
+  const totalOwedToMe = openDebts.filter((d) => d.type === 'owed_to_me').reduce((s, d) => s + Number(d.amount_rial), 0);
+  const netWorth = totalCash + totalCurrent + totalOwedToMe - remainingInstallmentDebt - totalIOwe;
+
   content.innerHTML = `
+    <div class="card" style="text-align:center">
+      <div class="muted">دارایی خالص شما</div>
+      <div class="privacy-target font-num" style="font-size:1.6rem;font-weight:800;margin-top:6px">${toman(netWorth)} <span class="muted" style="font-size:.8rem">ریال</span></div>
+    </div>
     <div class="metric-grid">
       <div class="metric-card">
         <div class="metric-label">سود/زیان کل</div>
@@ -968,7 +1033,7 @@ async function renderInvestments() {
     wireThousandsInput(`v-cur-price-${v.id}`);
   });
 
-  document.getElementById('refresh-prices').addEventListener('click', async (e) => {
+  onClickLocked(document.getElementById('refresh-prices'), async (e) => {
     e.target.textContent = '⏳ در حال بروزرسانی...';
     try {
       await api('/investments/refresh-prices', { method: 'POST' });
@@ -985,7 +1050,7 @@ async function renderInvestments() {
     vAmount.hidden = !isOther;
   });
 
-  document.getElementById('v-add').addEventListener('click', async () => {
+  onClickLocked(document.getElementById('v-add'), async () => {
     const title = document.getElementById('v-title').value;
     const asset_type = vType.value;
     if (!title) return;
@@ -1005,7 +1070,7 @@ async function renderInvestments() {
   });
 
   document.querySelectorAll('[data-update-price]').forEach((b) => {
-    b.addEventListener('click', async () => {
+    onClickLocked(b, async () => {
       const id = b.dataset.updatePrice;
       const current_unit_price_rial = numFromInput(`v-cur-price-${id}`);
       await api(`/investments/${id}`, { method: 'PUT', body: JSON.stringify({ current_unit_price_rial }) });
@@ -1014,7 +1079,7 @@ async function renderInvestments() {
   });
 
   document.querySelectorAll('[data-update]').forEach((b) => {
-    b.addEventListener('click', async () => {
+    onClickLocked(b, async () => {
       const id = b.dataset.update;
       const val = numFromInput(`v-cur-${id}`);
       await api(`/investments/${id}`, { method: 'PUT', body: JSON.stringify({ current_value_rial: val }) });
@@ -1047,7 +1112,7 @@ async function renderCategories() {
     </div>
   `;
 
-  document.getElementById('c-add').addEventListener('click', async () => {
+  onClickLocked(document.getElementById('c-add'), async () => {
     const name = document.getElementById('c-name').value;
     const direction = document.getElementById('c-dir').value;
     if (!name) return;
@@ -1056,7 +1121,7 @@ async function renderCategories() {
   });
 
   document.querySelectorAll('[data-edit]').forEach((b) => {
-    b.addEventListener('click', async () => {
+    onClickLocked(b, async () => {
       const newName = prompt('نام جدید:', b.dataset.name);
       if (!newName) return;
       await api(`/categories/${b.dataset.edit}`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
@@ -1067,7 +1132,7 @@ async function renderCategories() {
 
 async function renderAnalytics() {
   const [txs, categories] = await Promise.all([api('/transactions'), api('/categories')]);
-  const confirmed = txs.filter((t) => t.status === 'confirmed' && t.category_name !== TRANSFER_CATEGORY_NAME);
+  const confirmed = txs.filter((t) => t.status === 'confirmed' && !isNonFlowCategory(t.category_name));
 
   const now = new Date();
   const nowJalali = Jalali.toJalaali(now.getFullYear(), now.getMonth() + 1, now.getDate());
@@ -1185,6 +1250,7 @@ async function renderDebts() {
       ${d.note ? `<div class="muted" style="margin-top:4px">${d.note}</div>` : ''}
       <div class="row" style="gap:8px;margin-top:10px">
         ${d.status === 'open' ? `<button class="action" data-settle="${d.id}" style="flex:1">✅ تسویه شد</button>` : ''}
+        <button class="action secondary" data-edit-debt="${d.id}" style="width:auto">✎</button>
         <button class="action danger" data-delete-debt="${d.id}" style="width:auto">🗑</button>
       </div>
     </div>
@@ -1211,7 +1277,7 @@ async function renderDebts() {
 
   wireThousandsInput('d-amount');
 
-  document.getElementById('d-add').addEventListener('click', async () => {
+  onClickLocked(document.getElementById('d-add'), async () => {
     const person_name = document.getElementById('d-person').value;
     const amountToman = numFromInput('d-amount');
     if (!person_name || !amountToman) return;
@@ -1229,17 +1295,52 @@ async function renderDebts() {
   });
 
   document.querySelectorAll('[data-settle]').forEach((b) => {
-    b.addEventListener('click', async () => {
+    onClickLocked(b, async () => {
       await api(`/debts/${b.dataset.settle}`, { method: 'PUT', body: JSON.stringify({ status: 'settled' }) });
       renderDebts();
     });
   });
   document.querySelectorAll('[data-delete-debt]').forEach((b) => {
-    b.addEventListener('click', async () => {
+    onClickLocked(b, async () => {
       if (!confirm('حذف شود؟ (قابل بازیابی از سطل بازیابی)')) return;
       await api(`/debts/${b.dataset.deleteDebt}`, { method: 'DELETE' });
       renderDebts();
     });
+  });
+  document.querySelectorAll('[data-edit-debt]').forEach((b) => {
+    b.addEventListener('click', () => {
+      openDebtEditModal(debts.find((d) => d.id === Number(b.dataset.editDebt)));
+    });
+  });
+}
+
+function openDebtEditModal(debt) {
+  manualModal.innerHTML = `
+    <div class="card">
+      <strong>ویرایش بدهی/طلب</strong>
+      <input id="ed-person" placeholder="نام شخص" value="${debt.person_name}" />
+      <input id="ed-amount" type="text" inputmode="numeric" value="${toman(debt.amount_rial)}" />
+      <input id="ed-due" type="date" value="${debt.due_date ? debt.due_date.slice(0, 10) : ''}" />
+      <input id="ed-note" placeholder="توضیح (اختیاری)" value="${debt.note || ''}" />
+      <button class="action" id="ed-save">ذخیره</button>
+      <button class="action secondary" id="ed-cancel">انصراف</button>
+    </div>
+  `;
+  manualModal.hidden = false;
+  wireThousandsInput('ed-amount');
+  document.getElementById('ed-cancel').addEventListener('click', () => { manualModal.hidden = true; });
+  onClickLocked(document.getElementById('ed-save'), async () => {
+    await api(`/debts/${debt.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        person_name: document.getElementById('ed-person').value,
+        amount_rial: numFromInput('ed-amount'),
+        due_date: document.getElementById('ed-due').value || null,
+        note: document.getElementById('ed-note').value || null,
+      }),
+    });
+    manualModal.hidden = true;
+    renderDebts();
   });
 }
 
@@ -1266,7 +1367,7 @@ async function renderTrash() {
   `;
 
   document.querySelectorAll('[data-restore]').forEach((b) => {
-    b.addEventListener('click', async () => {
+    onClickLocked(b, async () => {
       await api(`/${b.dataset.restoreFn}/${b.dataset.restore}/restore`, { method: 'POST' });
       renderTrash();
     });
@@ -1312,7 +1413,7 @@ async function openManualModal() {
   wireTransferField('m-category', 'other-account-m', cats);
   wireLoanField('m-category', 'loan-person-m', cats);
   document.getElementById('m-cancel').addEventListener('click', () => { manualModal.hidden = true; });
-  document.getElementById('m-save').addEventListener('click', async () => {
+  onClickLocked(document.getElementById('m-save'), async () => {
     const account_id = document.getElementById('m-account').value;
     const direction = document.getElementById('m-direction').value;
     const amountToman = numFromInput('m-amount');
@@ -1369,7 +1470,7 @@ function openSmsModal() {
   fillSample();
   bankSelect.addEventListener('change', fillSample);
   document.getElementById('s-cancel').addEventListener('click', () => { smsModal.hidden = true; });
-  document.getElementById('s-send').addEventListener('click', async () => {
+  onClickLocked(document.getElementById('s-send'), async () => {
     await api('/webhook/sms', {
       method: 'POST',
       body: JSON.stringify({ bank: bankSelect.value, text: textArea.value }),

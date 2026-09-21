@@ -103,7 +103,7 @@
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   [hidden] { display: none !important; }
 
-  body.privacy-on .privacy-target { filter: blur(6px); user-select: none; }
+  .privacy-target { user-select: text; }
 
   .cat-pill-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
   .cat-pill {
@@ -232,7 +232,6 @@
     <div class="row" style="width:auto;gap:10px;margin-right:auto">
       <div style="text-align:left;min-width:0">
         <h1 style="margin:0;white-space:nowrap">کیف پول شخصی</h1>
-        <div class="muted" style="white-space:nowrap">دارایی خالص: <span id="header-networth" class="privacy-target font-num" style="color:var(--gold);font-weight:700">—</span> ریال</div>
       </div>
       <div style="width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,var(--gold),var(--gold-dark));flex:0 0 auto"></div>
     </div>
