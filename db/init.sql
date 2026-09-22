@@ -79,6 +79,17 @@ CREATE TABLE transactions (
   deleted_at TIMESTAMPTZ
 );
 
+CREATE TABLE reminders (
+  id SERIAL PRIMARY KEY,
+  module TEXT NOT NULL DEFAULT 'عمومی',
+  title TEXT NOT NULL,
+  note TEXT,
+  remind_at TIMESTAMPTZ NOT NULL,
+  sent BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at TIMESTAMPTZ
+);
+
 INSERT INTO accounts (bank_code, display_name, balance_rial) VALUES
   ('resalat', 'بانک رسالت', 259203041),
   ('blu', 'بلو', 3859212),

@@ -12,6 +12,21 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const app = express();
 app.use(express.json());
 
+// Self-migrating: reminders module didn't exist in the original init.sql, so create it
+// on startup if missing instead of requiring a manual psql migration on deploy.
+pool.query(`
+  CREATE TABLE IF NOT EXISTS reminders (
+    id SERIAL PRIMARY KEY,
+    module TEXT NOT NULL DEFAULT 'عمومی',
+    title TEXT NOT NULL,
+    note TEXT,
+    remind_at TIMESTAMPTZ NOT NULL,
+    sent BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at TIMESTAMPTZ
+  )
+`).catch((err) => console.error('reminders migration error', err));
+
 function toToman(rial) {
   return Math.round(rial);
 }
@@ -611,10 +626,88 @@ app.delete('/debts/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+// Partial or full repayment against an existing debt/receivable: subtracts the
+// amount and auto-settles once it reaches zero, instead of always marking done.
+app.post('/debts/:id/repay', async (req, res) => {
+  const { id } = req.params;
+  const { amount_rial } = req.body || {};
+  if (!amount_rial) return res.status(400).json({ error: 'amount_rial is required' });
+  const debtRes = await pool.query('SELECT * FROM debts WHERE id = $1 AND deleted_at IS NULL', [id]);
+  if (debtRes.rows.length === 0) return res.status(404).json({ error: 'not found' });
+  const debt = debtRes.rows[0];
+  const remaining = Math.max(0, Number(debt.amount_rial) - Number(amount_rial));
+  const result = await pool.query(
+    `UPDATE debts SET amount_rial = $1, status = $2 WHERE id = $3 RETURNING *`,
+    [remaining, remaining === 0 ? 'settled' : debt.status, id]
+  );
+  res.json(result.rows[0]);
+});
+
 app.post('/debts/:id/restore', async (req, res) => {
   const { id } = req.params;
   const result = await pool.query(
     'UPDATE debts SET deleted_at = NULL WHERE id = $1 AND deleted_at IS NOT NULL RETURNING *',
+    [id]
+  );
+  if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
+  res.json(result.rows[0]);
+});
+
+// ---------- Reminders module: a generic reminder system. Installments, debts, bills,
+// etc. are all just entries tagged with a "module" label so they show up in one place. ----------
+app.get('/reminders', async (req, res) => {
+  const result = await pool.query(
+    `SELECT * FROM reminders WHERE deleted_at IS NULL ORDER BY sent ASC, remind_at ASC`
+  );
+  res.json(result.rows);
+});
+
+app.get('/reminders/trash', async (req, res) => {
+  const result = await pool.query('SELECT * FROM reminders WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC');
+  res.json(result.rows);
+});
+
+app.post('/reminders', async (req, res) => {
+  const { module, title, note, remind_at } = req.body || {};
+  if (!title || !remind_at) return res.status(400).json({ error: 'title and remind_at are required' });
+  const result = await pool.query(
+    `INSERT INTO reminders (module, title, note, remind_at) VALUES ($1, $2, $3, $4) RETURNING *`,
+    [module || 'عمومی', title, note || null, remind_at]
+  );
+  res.json(result.rows[0]);
+});
+
+app.put('/reminders/:id', async (req, res) => {
+  const { id } = req.params;
+  const { module, title, note, remind_at } = req.body || {};
+  const result = await pool.query(
+    `UPDATE reminders SET
+       module = COALESCE($1, module),
+       title = COALESCE($2, title),
+       note = COALESCE($3, note),
+       remind_at = COALESCE($4, remind_at),
+       sent = false
+     WHERE id = $5 AND deleted_at IS NULL RETURNING *`,
+    [module ?? null, title ?? null, note ?? null, remind_at ?? null, id]
+  );
+  if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
+  res.json(result.rows[0]);
+});
+
+app.delete('/reminders/:id', async (req, res) => {
+  const { id } = req.params;
+  const result = await pool.query(
+    'UPDATE reminders SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL RETURNING id',
+    [id]
+  );
+  if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
+  res.json({ ok: true });
+});
+
+app.post('/reminders/:id/restore', async (req, res) => {
+  const { id } = req.params;
+  const result = await pool.query(
+    'UPDATE reminders SET deleted_at = NULL WHERE id = $1 AND deleted_at IS NOT NULL RETURNING *',
     [id]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
@@ -738,6 +831,26 @@ cron.schedule('0 8 * * *', async () => {
     }
   } catch (err) {
     console.error('cron error', err);
+  }
+});
+
+// ---------- Reminders: check every 5 minutes for due, unsent reminders ----------
+cron.schedule('*/5 * * * *', async () => {
+  try {
+    const dueRes = await pool.query(
+      `SELECT * FROM reminders WHERE deleted_at IS NULL AND sent = false AND remind_at <= now()`
+    );
+    for (const r of dueRes.rows) {
+      await sendNtfy({
+        title: `⏰ یادآوری (${r.module})`,
+        message: r.note ? `${r.title}\n${r.note}` : r.title,
+        priority: 5,
+        tags: ['alarm_clock'],
+      });
+      await pool.query('UPDATE reminders SET sent = true WHERE id = $1', [r.id]);
+    }
+  } catch (err) {
+    console.error('reminders cron error', err);
   }
 });
 

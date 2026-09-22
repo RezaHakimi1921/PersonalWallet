@@ -96,6 +96,52 @@ function formatJalaliDateTime(dateObj) {
   return `${formatJalaliDate(dateObj)} - ${time}`;
 }
 
+// Small inline Jalali calendar picker: renders a month grid into `containerId`, writes
+// the selected Gregorian date (yyyy-mm-dd) into `hiddenInputId` for form submission.
+function createJalaliCalendar(containerId, hiddenInputId, initialDate) {
+  const container = document.getElementById(containerId);
+  const hidden = document.getElementById(hiddenInputId);
+  const now = initialDate || new Date();
+  const state = Jalali.toJalaali(now.getFullYear(), now.getMonth() + 1, now.getDate());
+
+  function toIso(jy, jm, jd) {
+    const g = Jalali.toGregorian(jy, jm, jd);
+    return `${g.gy}-${String(g.gm).padStart(2, '0')}-${String(g.gd).padStart(2, '0')}`;
+  }
+
+  function draw() {
+    const len = Jalali.monthLength(state.jy, state.jm);
+    const days = Array.from({ length: len }, (_, i) => i + 1);
+    container.innerHTML = `
+      <div class="row">
+        <button type="button" class="secondary" data-nav="-1" style="width:auto;padding:6px 12px">‹</button>
+        <strong>${JALALI_MONTH_NAMES[state.jm - 1]} ${state.jy}</strong>
+        <button type="button" class="secondary" data-nav="1" style="width:auto;padding:6px 12px">›</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-top:8px">
+        ${days.map((d) => `<button type="button" data-day="${d}" style="padding:8px 0;border-radius:8px;border:1px solid var(--border);background:${d === state.jd ? 'var(--gold)' : 'transparent'};cursor:pointer">${d}</button>`).join('')}
+      </div>
+    `;
+    hidden.value = toIso(state.jy, state.jm, state.jd);
+    container.querySelector('[data-nav="-1"]').addEventListener('click', () => nav(-1));
+    container.querySelector('[data-nav="1"]').addEventListener('click', () => nav(1));
+    container.querySelectorAll('[data-day]').forEach((b) => {
+      b.addEventListener('click', () => { state.jd = Number(b.dataset.day); draw(); });
+    });
+  }
+
+  function nav(delta) {
+    state.jm += delta;
+    if (state.jm < 1) { state.jm = 12; state.jy -= 1; }
+    if (state.jm > 12) { state.jm = 1; state.jy += 1; }
+    const len = Jalali.monthLength(state.jy, state.jm);
+    if (state.jd > len) state.jd = len;
+    draw();
+  }
+
+  draw();
+}
+
 function toman(rial) {
   return Math.round(rial).toLocaleString('en-US');
 }
@@ -230,6 +276,7 @@ async function render(tab) {
     if (tab === 'categories') return renderCategories();
     if (tab === 'analytics') return renderAnalytics();
     if (tab === 'debts') return renderDebts();
+    if (tab === 'reminders') return renderReminders();
     if (tab === 'trash') return renderTrash();
   } catch (e) {
     content.innerHTML = '<p class="muted">خطا در بارگذاری اطلاعات</p>';
@@ -409,20 +456,20 @@ async function renderOverview() {
 }
 
 async function renderPending() {
-  const [txs, cats, accounts] = await Promise.all([
-    api('/transactions?status=pending'), api('/categories'), api('/accounts'),
+  const [txs, cats, accounts, debts] = await Promise.all([
+    api('/transactions?status=pending'), api('/categories'), api('/accounts'), api('/debts'),
   ]);
   if (txs.length === 0) {
     content.innerHTML = '<p class="muted">تراکنش در انتظاری وجود ندارد.</p>';
     return;
   }
   content.innerHTML = txs.map((t) => txCard(t, cats, true, accounts)).join('');
-  txs.forEach((t) => wireTxCard(t, cats, accounts));
+  txs.forEach((t) => wireTxCard(t, cats, accounts, debts));
 }
 
 const TRANSFER_CATEGORY_NAME = 'انتقال وجه بین حساب';
 function isNonFlowCategory(name) {
-  return name === TRANSFER_CATEGORY_NAME || name === 'قرض';
+  return name === TRANSFER_CATEGORY_NAME || name === 'قرض' || name === 'تسویه طلب' || name === 'تسویه بدهی';
 }
 
 function otherAccountFieldHtml(idSuffix, accounts, currentAccountId) {
@@ -469,6 +516,51 @@ async function maybeCreateLoanDebt(loanInputId, direction, amount_rial) {
       amount_rial,
     }),
   });
+}
+
+// Two separate category names: one shown for income (settling a receivable someone
+// owes me), one for expense (settling a debt I owe someone).
+const REPAY_CATEGORY_NAME_INCOME = 'تسویه طلب';
+const REPAY_CATEGORY_NAME_EXPENSE = 'تسویه بدهی';
+
+function repayFieldHtml(idSuffix) {
+  return `<select id="repay-debt-${idSuffix}" hidden></select>`;
+}
+
+function repayOptionsHtml(debts, direction) {
+  const type = direction === 'income' ? 'owed_to_me' : 'i_owe';
+  const matching = debts.filter((d) => d.status === 'open' && d.type === type);
+  if (matching.length === 0) {
+    return direction === 'income'
+      ? '<option value="">طلب بازی ثبت نشده</option>'
+      : '<option value="">بدهی بازی ثبت نشده</option>';
+  }
+  return '<option value="">کدوم شخص؟</option>' + matching
+    .map((d) => `<option value="${d.id}">${d.person_name} (${toman(d.amount_rial)} ریال)</option>`)
+    .join('');
+}
+
+// direction is a function so it can re-read a changeable direction <select> (edit/manual forms)
+// or just return a fixed value (pending confirm form, where direction can't change).
+function wireRepayField(catSelectId, direction, repaySelectId, cats, debts) {
+  const catSelect = document.getElementById(catSelectId);
+  const repaySelect = document.getElementById(repaySelectId);
+  const update = () => {
+    const selected = cats.find((c) => String(c.id) === catSelect.value);
+    const expectedName = direction() === 'income' ? REPAY_CATEGORY_NAME_INCOME : REPAY_CATEGORY_NAME_EXPENSE;
+    const isRepay = selected && selected.name === expectedName;
+    repaySelect.hidden = !isRepay;
+    if (isRepay) repaySelect.innerHTML = repayOptionsHtml(debts, direction());
+  };
+  catSelect.addEventListener('change', update);
+  update();
+  return update;
+}
+
+async function maybeRepayDebt(repaySelectId, amount_rial) {
+  const repaySelect = document.getElementById(repaySelectId);
+  if (repaySelect.hidden || !repaySelect.value) return;
+  await api(`/debts/${repaySelect.value}/repay`, { method: 'POST', body: JSON.stringify({ amount_rial }) });
 }
 
 const TX_PAGE_SIZE = 10;
@@ -562,7 +654,7 @@ function wireTxFilters() {
 }
 
 async function openEditTxModal(t) {
-  const [accounts, cats] = await Promise.all([api('/accounts'), api('/categories')]);
+  const [accounts, cats, debts] = await Promise.all([api('/accounts'), api('/categories'), api('/debts')]);
   const renderCatOptions = (direction) => cats
     .filter((c) => c.direction === direction)
     .map((c) => `<option value="${c.id}" ${c.id === t.category_id ? 'selected' : ''}>${c.name}</option>`)
@@ -582,6 +674,7 @@ async function openEditTxModal(t) {
       <input id="e-amount" type="text" inputmode="numeric" value="${toman(t.amount_rial)}" />
       <select id="e-category">${renderCatOptions(t.direction)}</select>
       ${loanPersonFieldHtml('e')}
+      ${repayFieldHtml('e')}
       <input id="e-note" placeholder="توضیح" value="${t.note || ''}" />
       <input id="e-tags" placeholder="تگ (با کاما جدا کن)" value="${t.tags || ''}" />
       <button class="action" id="e-save">ذخیره</button>
@@ -591,13 +684,16 @@ async function openEditTxModal(t) {
   manualModal.hidden = false;
   wireThousandsInput('e-amount');
 
+  const updateRepayE = wireRepayField('e-category', () => document.getElementById('e-direction').value, 'repay-debt-e', cats, debts);
   document.getElementById('e-direction').addEventListener('change', (e) => {
     document.getElementById('e-category').innerHTML = renderCatOptions(e.target.value);
+    updateRepayE();
   });
   wireLoanField('e-category', 'loan-person-e', cats);
   document.getElementById('e-cancel').addEventListener('click', () => { manualModal.hidden = true; });
   onClickLocked(document.getElementById('e-save'), async () => {
     await maybeCreateLoanDebt('loan-person-e', document.getElementById('e-direction').value, numFromInput('e-amount'));
+    await maybeRepayDebt('repay-debt-e', numFromInput('e-amount'));
     await api(`/transactions/${t.id}/edit`, {
       method: 'PUT',
       body: JSON.stringify({
@@ -633,6 +729,7 @@ function txCard(t, cats, editable, accounts) {
         <select id="cat-${t.id}"><option value="">انتخاب دسته‌بندی...</option>${options}</select>
         ${otherAccountFieldHtml(t.id, accounts, t.account_id)}
         ${loanPersonFieldHtml(t.id)}
+        ${repayFieldHtml(t.id)}
         <input id="note-${t.id}" placeholder="توضیح (اختیاری)" />
         <input id="tags-${t.id}" placeholder="تگ (مثلا سفر، کار — با کاما جدا کن)" />
         <div class="row" style="gap:8px">
@@ -644,11 +741,12 @@ function txCard(t, cats, editable, accounts) {
   `;
 }
 
-function wireTxCard(t, cats, accounts) {
+function wireTxCard(t, cats, accounts, debts) {
   const btn = document.getElementById(`confirm-${t.id}`);
   if (!btn) return;
   wireTransferField(`cat-${t.id}`, `other-account-${t.id}`, cats);
   wireLoanField(`cat-${t.id}`, `loan-person-${t.id}`, cats);
+  wireRepayField(`cat-${t.id}`, () => t.direction, `repay-debt-${t.id}`, cats, debts || []);
   onClickLocked(btn, async () => {
     const category_id = document.getElementById(`cat-${t.id}`).value || null;
     let note = document.getElementById(`note-${t.id}`).value || null;
@@ -659,6 +757,7 @@ function wireTxCard(t, cats, accounts) {
     }
     const tags = document.getElementById(`tags-${t.id}`).value || null;
     await maybeCreateLoanDebt(`loan-person-${t.id}`, t.direction, t.amount_rial);
+    await maybeRepayDebt(`repay-debt-${t.id}`, t.amount_rial);
     await api(`/transactions/${t.id}/confirm`, { method: 'POST', body: JSON.stringify({ category_id, note, tags }) });
     document.getElementById(`tx-${t.id}`).remove();
   });
@@ -1344,9 +1443,116 @@ function openDebtEditModal(debt) {
   });
 }
 
+const REMINDER_MODULES = ['عمومی', 'قسط', 'بدهی و طلب', 'قبض', 'سایر'];
+
+async function renderReminders() {
+  const reminders = await api('/reminders');
+  const pending = reminders.filter((r) => !r.sent);
+  const sent = reminders.filter((r) => r.sent);
+
+  const card = (r) => `
+    <div class="card">
+      <div class="row">
+        <strong>${r.title}</strong>
+        <span class="badge ${r.sent ? 'completed' : 'active'}">${r.module}</span>
+      </div>
+      <div class="muted font-num" style="margin-top:4px">${formatJalaliDateTime(new Date(r.remind_at))}</div>
+      ${r.note ? `<div class="muted" style="margin-top:4px">${r.note}</div>` : ''}
+      <div class="row" style="gap:8px;margin-top:10px">
+        <button class="action secondary" data-edit-reminder="${r.id}" style="width:auto">✎</button>
+        <button class="action danger" data-delete-reminder="${r.id}" style="width:auto">🗑</button>
+      </div>
+    </div>
+  `;
+
+  content.innerHTML = `
+    <div class="card">
+      <strong>یادآوری جدید</strong>
+      <select id="r-module">${REMINDER_MODULES.map((m) => `<option value="${m}">${m}</option>`).join('')}</select>
+      <input id="r-title" placeholder="عنوان یادآوری" />
+      <input id="r-note" placeholder="توضیح (اختیاری)" />
+      <div id="r-cal" style="margin-top:8px"></div>
+      <input id="r-time" type="time" value="08:00" style="margin-top:8px" />
+      <input id="r-date-iso" type="hidden" />
+      <button class="action" id="r-add">ثبت یادآوری</button>
+    </div>
+    <strong>یادآوری‌های فعال (${pending.length})</strong>
+    ${pending.length ? pending.map(card).join('') : '<p class="muted">چیزی ثبت نشده.</p>'}
+    ${sent.length ? `<strong style="margin-top:10px;display:block">ارسال‌شده (${sent.length})</strong>${sent.map(card).join('')}` : ''}
+  `;
+
+  createJalaliCalendar('r-cal', 'r-date-iso');
+
+  onClickLocked(document.getElementById('r-add'), async () => {
+    const title = document.getElementById('r-title').value;
+    if (!title) return;
+    const dateIso = document.getElementById('r-date-iso').value;
+    const time = document.getElementById('r-time').value || '08:00';
+    const remind_at = new Date(`${dateIso}T${time}:00`).toISOString();
+    await api('/reminders', {
+      method: 'POST',
+      body: JSON.stringify({
+        module: document.getElementById('r-module').value,
+        title,
+        note: document.getElementById('r-note').value || null,
+        remind_at,
+      }),
+    });
+    renderReminders();
+  });
+
+  document.querySelectorAll('[data-delete-reminder]').forEach((b) => {
+    onClickLocked(b, async () => {
+      if (!confirm('حذف شود؟ (قابل بازیابی از سطل بازیابی)')) return;
+      await api(`/reminders/${b.dataset.deleteReminder}`, { method: 'DELETE' });
+      renderReminders();
+    });
+  });
+  document.querySelectorAll('[data-edit-reminder]').forEach((b) => {
+    b.addEventListener('click', () => {
+      openReminderEditModal(reminders.find((r) => r.id === Number(b.dataset.editReminder)));
+    });
+  });
+}
+
+function openReminderEditModal(reminder) {
+  const current = new Date(reminder.remind_at);
+  manualModal.innerHTML = `
+    <div class="card">
+      <strong>ویرایش یادآوری</strong>
+      <select id="er-module">${REMINDER_MODULES.map((m) => `<option value="${m}" ${m === reminder.module ? 'selected' : ''}>${m}</option>`).join('')}</select>
+      <input id="er-title" placeholder="عنوان یادآوری" value="${reminder.title}" />
+      <input id="er-note" placeholder="توضیح (اختیاری)" value="${reminder.note || ''}" />
+      <div id="er-cal" style="margin-top:8px"></div>
+      <input id="er-time" type="time" value="${String(current.getHours()).padStart(2, '0')}:${String(current.getMinutes()).padStart(2, '0')}" style="margin-top:8px" />
+      <input id="er-date-iso" type="hidden" />
+      <button class="action" id="er-save">ذخیره</button>
+      <button class="action secondary" id="er-cancel">انصراف</button>
+    </div>
+  `;
+  manualModal.hidden = false;
+  createJalaliCalendar('er-cal', 'er-date-iso', current);
+  document.getElementById('er-cancel').addEventListener('click', () => { manualModal.hidden = true; });
+  onClickLocked(document.getElementById('er-save'), async () => {
+    const dateIso = document.getElementById('er-date-iso').value;
+    const time = document.getElementById('er-time').value || '08:00';
+    await api(`/reminders/${reminder.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        module: document.getElementById('er-module').value,
+        title: document.getElementById('er-title').value,
+        note: document.getElementById('er-note').value || null,
+        remind_at: new Date(`${dateIso}T${time}:00`).toISOString(),
+      }),
+    });
+    manualModal.hidden = true;
+    renderReminders();
+  });
+}
+
 async function renderTrash() {
-  const [txs, installments, debts] = await Promise.all([
-    api('/transactions/trash'), api('/installments/trash'), api('/debts/trash'),
+  const [txs, installments, debts, reminders] = await Promise.all([
+    api('/transactions/trash'), api('/installments/trash'), api('/debts/trash'), api('/reminders/trash'),
   ]);
 
   const section = (title, items, restoreFn) => `
@@ -1364,6 +1570,7 @@ async function renderTrash() {
     ${section('تراکنش‌های حذف‌شده', txs, 'transactions')}
     ${section('اقساط حذف‌شده', installments, 'installments')}
     ${section('بدهی/طلب حذف‌شده', debts, 'debts')}
+    ${section('یادآوری‌های حذف‌شده', reminders, 'reminders')}
   `;
 
   document.querySelectorAll('[data-restore]').forEach((b) => {
@@ -1379,7 +1586,7 @@ const fab = document.getElementById('fab');
 const manualModal = document.getElementById('manual-modal');
 
 async function openManualModal() {
-  const [accounts, cats] = await Promise.all([api('/accounts'), api('/categories')]);
+  const [accounts, cats, debts] = await Promise.all([api('/accounts'), api('/categories'), api('/debts')]);
   const accountOptions = accounts.map((a) => `<option value="${a.id}">${a.display_name}</option>`).join('');
   const renderCatOptions = (direction) => cats
     .filter((c) => c.direction === direction)
@@ -1398,6 +1605,7 @@ async function openManualModal() {
       <select id="m-category">${renderCatOptions('expense')}</select>
       ${otherAccountFieldHtml('m', accounts, null)}
       ${loanPersonFieldHtml('m')}
+      ${repayFieldHtml('m')}
       <input id="m-note" placeholder="توضیح (اختیاری)" />
       <input id="m-tags" placeholder="تگ (اختیاری، با کاما جدا کن)" />
       <button class="action" id="m-save">ثبت</button>
@@ -1407,8 +1615,10 @@ async function openManualModal() {
   manualModal.hidden = false;
   wireThousandsInput('m-amount');
 
+  const updateRepayM = wireRepayField('m-category', () => document.getElementById('m-direction').value, 'repay-debt-m', cats, debts);
   document.getElementById('m-direction').addEventListener('change', (e) => {
     document.getElementById('m-category').innerHTML = renderCatOptions(e.target.value);
+    updateRepayM();
   });
   wireTransferField('m-category', 'other-account-m', cats);
   wireLoanField('m-category', 'loan-person-m', cats);
@@ -1427,6 +1637,7 @@ async function openManualModal() {
     if (!account_id || !amountToman) return;
     const tags = document.getElementById('m-tags').value || null;
     await maybeCreateLoanDebt('loan-person-m', direction, amountToman);
+    await maybeRepayDebt('repay-debt-m', amountToman);
     await api('/transactions/manual', {
       method: 'POST',
       body: JSON.stringify({ account_id, amount_rial: amountToman, direction, category_id, note, tags }),
