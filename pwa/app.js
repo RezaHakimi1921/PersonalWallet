@@ -393,6 +393,15 @@ async function renderOverview() {
     </div>
   `;
 
+  const monthSavings = monthIncome - monthExpense;
+  const savingsRate = monthIncome > 0 ? Math.round((monthSavings / monthIncome) * 100) : null;
+  html += `
+    <div class="card row">
+      <span class="muted">پس‌انداز این ماه</span>
+      <strong class="privacy-target font-num" style="color:${monthSavings >= 0 ? 'var(--green)' : 'var(--red)'}">${monthSavings >= 0 ? '+' : ''}${toman(monthSavings)} ریال${savingsRate != null ? ` (${savingsRate}٪ درآمد)` : ''}</strong>
+    </div>
+  `;
+
   html += `
     <div class="card">
       <div class="row">
@@ -736,11 +745,7 @@ async function renderTransactions() {
     b.addEventListener('click', () => openEditTxModal(txs.find((t) => t.id === Number(b.dataset.editTx))));
   });
   document.querySelectorAll('[data-delete-tx]').forEach((b) => {
-    onClickLocked(b, async () => {
-      if (!confirm('این تراکنش حذف شود؟ موجودی حساب به حالت قبل برمی‌گردد.')) return;
-      await api(`/transactions/${b.dataset.deleteTx}`, { method: 'DELETE' });
-      renderTransactions();
-    });
+    b.addEventListener('click', () => openDeleteTxModal(b.dataset.deleteTx, () => renderTransactions()));
   });
   wireTxFilters();
 }
@@ -883,11 +888,34 @@ function wireTxCard(t, cats, accounts, debts, histogram) {
     await api(`/transactions/${t.id}/confirm`, { method: 'POST', body: JSON.stringify({ category_id, note, tags }) });
     document.getElementById(`tx-${t.id}`).remove();
   });
-  onClickLocked(document.getElementById(`delete-${t.id}`), async () => {
-    if (!confirm('این تراکنش حذف شود؟ موجودی حساب به حالت قبل برمی‌گردد.')) return;
-    await api(`/transactions/${t.id}`, { method: 'DELETE' });
-    document.getElementById(`tx-${t.id}`).remove();
-    updatePendingBadge();
+  document.getElementById(`delete-${t.id}`).addEventListener('click', () => {
+    openDeleteTxModal(t.id, () => {
+      document.getElementById(`tx-${t.id}`).remove();
+      updatePendingBadge();
+    });
+  });
+}
+
+function openDeleteTxModal(txId, onDeleted) {
+  manualModal.innerHTML = `
+    <div class="card">
+      <strong>حذف تراکنش</strong>
+      <label class="row" style="margin-top:10px">
+        <span>موجودی حساب هم به حالت قبل برگرده</span>
+        <input id="del-revert-balance" type="checkbox" checked style="width:auto" />
+      </label>
+      <div class="muted" style="font-size:.7rem;margin-top:4px">اگه این تراکنش تکراری بود یا موجودی از جای دیگه‌ای درسته، تیک رو بردار تا فقط خود تراکنش حذف بشه و موجودی دست‌نخورده بمونه.</div>
+      <button class="action danger" id="del-confirm">حذف</button>
+      <button class="action secondary" id="del-cancel">انصراف</button>
+    </div>
+  `;
+  manualModal.hidden = false;
+  document.getElementById('del-cancel').addEventListener('click', () => { manualModal.hidden = true; });
+  onClickLocked(document.getElementById('del-confirm'), async () => {
+    const revert_balance = document.getElementById('del-revert-balance').checked;
+    await api(`/transactions/${txId}`, { method: 'DELETE', body: JSON.stringify({ revert_balance }) });
+    manualModal.hidden = true;
+    onDeleted();
   });
 }
 
@@ -1433,8 +1461,9 @@ function shiftJalaliMonth(jy, jm, delta) {
 let analyticsMonth = null; // {jy, jm} — the month currently being browsed; null = current month
 
 async function renderAnalytics() {
-  const [txs, categories] = await Promise.all([api('/transactions'), api('/categories')]);
+  const [txs, categories, accounts] = await Promise.all([api('/transactions'), api('/categories'), api('/accounts')]);
   const confirmed = txs.filter((t) => t.status === 'confirmed' && !isNonFlowCategory(t.category_name));
+  const totalCash = accounts.reduce((s, a) => s + Number(a.balance_rial), 0);
 
   const now = new Date();
   const nowJalali = Jalali.toJalaali(now.getFullYear(), now.getMonth() + 1, now.getDate());
@@ -1461,6 +1490,7 @@ async function renderAnalytics() {
   });
   const topCategories = Object.entries(byCategory).sort((a, b) => b[1] - a[1]).slice(0, 8);
   const maxCategoryAmount = topCategories[0]?.[1] || 1;
+  const categoryShare = (amount) => thisSum > 0 ? Math.round((amount / thisSum) * 100) : 0;
 
   // Weekday heatmap (Saturday..Friday), selected month
   const weekdayNames = ['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه'];
@@ -1505,6 +1535,75 @@ async function renderAnalytics() {
   }
   const maxLast6 = Math.max(...last6.map((m) => Math.max(m.exp, m.inc)), 1);
 
+  // Compare the selected month against the average of the 3/6 months before it
+  const monthExpenseSum = (jy, jm) => confirmed
+    .filter((t) => t.direction === 'expense' && inJalaliYM(new Date(t.created_at), jy, jm))
+    .reduce((s, t) => s + Number(t.amount_rial), 0);
+  const avgOfPriorMonths = (n) => {
+    let sum = 0;
+    for (let i = 1; i <= n; i++) {
+      const m = shiftJalaliMonth(selY, selM, -i);
+      sum += monthExpenseSum(m.jy, m.jm);
+    }
+    return sum / n;
+  };
+  const avg3 = avgOfPriorMonths(3);
+  const avg6 = avgOfPriorMonths(6);
+  const vsAvg3 = avg3 > 0 ? Math.round(((thisSum - avg3) / avg3) * 100) : null;
+  const vsAvg6 = avg6 > 0 ? Math.round(((thisSum - avg6) / avg6) * 100) : null;
+
+  // Biggest single expenses this month
+  const biggestExpenses = [...thisMonthExpense].sort((a, b) => b.amount_rial - a.amount_rial).slice(0, 5);
+
+  // Average daily spend and an end-of-month forecast (only meaningful for the current month)
+  const daysElapsed = isCurrentMonth ? nowJalali.jd : daysInMonth;
+  const avgDaily = daysElapsed > 0 ? thisSum / daysElapsed : 0;
+  const forecastEndOfMonth = isCurrentMonth ? Math.round(avgDaily * daysInMonth) : null;
+
+  // Runway: how many months the current cash lasts at the recent burn rate
+  const burnRate3 = last6.slice(-3).reduce((s, m) => s + m.exp, 0) / 3;
+  const runwayMonths = burnRate3 > 0 ? totalCash / burnRate3 : null;
+
+  // Unusual expenses: this month's transactions that are well above their
+  // category's historical average (needs at least 3 prior data points).
+  const categoryStats = (catId) => {
+    const amounts = confirmed
+      .filter((t) => t.direction === 'expense' && t.category_id === catId && !inJalaliYM(new Date(t.created_at), selY, selM))
+      .map((t) => Number(t.amount_rial));
+    if (amounts.length < 3) return null;
+    const mean = amounts.reduce((s, a) => s + a, 0) / amounts.length;
+    const variance = amounts.reduce((s, a) => s + (a - mean) ** 2, 0) / amounts.length;
+    return { mean, stdev: Math.sqrt(variance) };
+  };
+  const unusualExpenses = thisMonthExpense.filter((t) => {
+    if (!t.category_id) return false;
+    const stats = categoryStats(t.category_id);
+    if (!stats) return false;
+    const amount = Number(t.amount_rial);
+    return amount > stats.mean + 1.5 * stats.stdev && amount > stats.mean * 1.5;
+  }).sort((a, b) => b.amount_rial - a.amount_rial).slice(0, 5);
+
+  // Transactions flagged as likely duplicates at ingestion time (still confirmed, this month)
+  const thisMonthAll = confirmed.filter((t) => inJalaliYM(new Date(t.created_at), selY, selM));
+  const duplicateFlagged = thisMonthAll.filter((t) => t.note && t.note.includes('تکراری'));
+
+  // Likely recurring/subscription payments: same category+amount+direction showing up
+  // in at least 3 of the last 4 months.
+  const last4Months = [3, 2, 1, 0].map((i) => shiftJalaliMonth(nowJalali.jy, nowJalali.jm, -i));
+  const recurringGroups = {};
+  confirmed.filter((t) => t.direction === 'expense' && t.category_id).forEach((t) => {
+    const d = new Date(t.created_at);
+    const j = Jalali.toJalaali(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    const monthIndex = last4Months.findIndex((m) => m.jy === j.jy && m.jm === j.jm);
+    if (monthIndex === -1) return;
+    const key = `${t.category_id}:${t.amount_rial}`;
+    recurringGroups[key] = recurringGroups[key] || { name: t.category_name, amount: Number(t.amount_rial), months: new Set() };
+    recurringGroups[key].months.add(monthIndex);
+  });
+  const recurringPayments = Object.values(recurringGroups)
+    .filter((g) => g.months.size >= 3)
+    .sort((a, b) => b.amount - a.amount);
+
   content.innerHTML = `
     <div class="card">
       <div class="row">
@@ -1516,11 +1615,83 @@ async function renderAnalytics() {
         <span class="muted">هزینه نسبت به ماه قبل</span>
         ${trendPercent != null ? `<strong class="${trendPercent >= 0 ? 'trend-up' : 'trend-down'} font-num">${trendPercent >= 0 ? '▲' : '▼'} ${Math.abs(trendPercent)}٪</strong>` : '<span class="muted">داده‌ی ماه قبل نیست</span>'}
       </div>
+      <div class="row" style="margin-top:4px">
+        <span class="muted" style="font-size:.75rem">نسبت به میانگین ۳ ماه قبل</span>
+        ${vsAvg3 != null ? `<strong class="${vsAvg3 >= 0 ? 'trend-up' : 'trend-down'} font-num" style="font-size:.85rem">${vsAvg3 >= 0 ? '▲' : '▼'} ${Math.abs(vsAvg3)}٪</strong>` : '<span class="muted" style="font-size:.75rem">داده کافی نیست</span>'}
+      </div>
+      <div class="row" style="margin-top:4px">
+        <span class="muted" style="font-size:.75rem">نسبت به میانگین ۶ ماه قبل</span>
+        ${vsAvg6 != null ? `<strong class="${vsAvg6 >= 0 ? 'trend-up' : 'trend-down'} font-num" style="font-size:.85rem">${vsAvg6 >= 0 ? '▲' : '▼'} ${Math.abs(vsAvg6)}٪</strong>` : '<span class="muted" style="font-size:.75rem">داده کافی نیست</span>'}
+      </div>
       <div class="row muted font-num" style="margin-top:6px;font-size:.75rem">
         <span>این ماه: ${toman(thisSum)} ریال</span>
         <span>ماه قبل: ${toman(lastSum)} ریال</span>
       </div>
+      ${isCurrentMonth ? `
+        <div class="row muted font-num" style="margin-top:6px;font-size:.75rem;border-top:1px solid var(--border);padding-top:6px">
+          <span>میانگین هزینه‌ی روزانه: ${toman(Math.round(avgDaily))} ریال</span>
+          <span>پیش‌بینی پایان ماه: ${toman(forecastEndOfMonth)} ریال</span>
+        </div>
+      ` : ''}
     </div>
+
+    <div class="card">
+      <div class="row">
+        <span class="muted">دوام موجودی فعلی با نرخ خرج اخیر</span>
+      </div>
+      <strong class="privacy-target font-num" style="font-size:1.1rem">${runwayMonths != null ? `${runwayMonths.toFixed(1)} ماه` : 'داده کافی نیست'}</strong>
+      <div class="muted" style="font-size:.7rem;margin-top:4px">بر اساس میانگین هزینه‌ی ۳ ماه اخیر (${toman(Math.round(burnRate3))} ریال/ماه) و نقدینگی فعلی (${toman(totalCash)} ریال)</div>
+    </div>
+
+    ${biggestExpenses.length > 0 ? `
+      <div class="card">
+        <strong>بزرگ‌ترین هزینه‌های ماه</strong>
+        ${biggestExpenses.map((t) => `
+          <div class="row" style="margin-top:8px;font-size:.75rem">
+            <span>${t.category_name || 'بدون دسته'} · <span class="muted">${formatJalaliDateTime(new Date(t.created_at))}</span></span>
+            <span class="font-num" style="color:var(--red)">${toman(t.amount_rial)} ریال</span>
+          </div>
+        `).join('')}
+      </div>
+    ` : ''}
+
+    ${unusualExpenses.length > 0 ? `
+      <div class="card" style="border-color:rgba(245,158,11,.4)">
+        <strong>⚠️ هزینه‌های غیرعادی این ماه</strong>
+        <div class="muted" style="font-size:.7rem;margin-top:4px">به‌طور محسوسی بیشتر از میانگین همیشگی همون دسته</div>
+        ${unusualExpenses.map((t) => `
+          <div class="row" style="margin-top:8px;font-size:.75rem">
+            <span>${t.category_name} · <span class="muted">${formatJalaliDateTime(new Date(t.created_at))}</span></span>
+            <span class="font-num" style="color:#fbbf24">${toman(t.amount_rial)} ریال</span>
+          </div>
+        `).join('')}
+      </div>
+    ` : ''}
+
+    ${recurringPayments.length > 0 ? `
+      <div class="card">
+        <strong>پرداخت‌های دوره‌ای احتمالی</strong>
+        <div class="muted" style="font-size:.7rem;margin-top:4px">مبلغ ثابتی که حداقل ۳ ماه از ۴ ماه اخیر تکرار شده</div>
+        ${recurringPayments.map((g) => `
+          <div class="row" style="margin-top:8px;font-size:.75rem">
+            <span>${g.name} · <span class="muted">${g.months.size} از ۴ ماه</span></span>
+            <span class="font-num">${toman(g.amount)} ریال</span>
+          </div>
+        `).join('')}
+      </div>
+    ` : ''}
+
+    ${duplicateFlagged.length > 0 ? `
+      <div class="card" style="border-color:rgba(248,113,113,.4)">
+        <strong>تراکنش‌های احتمالاً تکراری (${JALALI_MONTH_NAMES[selM - 1]})</strong>
+        ${duplicateFlagged.map((t) => `
+          <div class="row" style="margin-top:8px;font-size:.75rem">
+            <span>${t.account_name} · <span class="muted">${formatJalaliDateTime(new Date(t.created_at))}</span></span>
+            <span class="font-num">${toman(t.amount_rial)} ریال</span>
+          </div>
+        `).join('')}
+      </div>
+    ` : ''}
 
     <div class="card">
       <strong>مقایسه‌ی ۶ ماه اخیر (هزینه/درآمد)</strong>
@@ -1539,7 +1710,7 @@ async function renderAnalytics() {
         <div class="bar-row">
           <span style="font-size:.75rem;width:90px;flex-shrink:0">${name}</span>
           <div class="bar-track"><div class="bar-fill" style="width:${Math.round(amount / maxCategoryAmount * 100)}%"></div></div>
-          <span class="font-num" style="font-size:.7rem;width:auto;flex-shrink:0">${toman(amount)}</span>
+          <span class="font-num" style="font-size:.7rem;width:auto;flex-shrink:0">${toman(amount)} (${categoryShare(amount)}٪)</span>
         </div>
       `).join('')}
     </div>

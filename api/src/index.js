@@ -27,6 +27,13 @@ pool.query(`
   )
 `).catch((err) => console.error('reminders migration error', err));
 
+// Self-migrating: lets a transaction delete optionally skip reverting the account
+// balance (e.g. deleting a duplicate whose balance effect should stay applied).
+// Restore needs to know which one happened so it mirrors it correctly.
+pool.query(`
+  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS balance_reverted BOOLEAN NOT NULL DEFAULT true
+`).catch((err) => console.error('balance_reverted migration error', err));
+
 function toToman(rial) {
   return Math.round(rial);
 }
@@ -237,22 +244,29 @@ app.post('/transactions/manual', async (req, res) => {
   }
 });
 
-// Soft-delete a transaction (reverses its balance effect; recoverable via /restore).
+// Soft-delete a transaction. By default reverses its balance effect (the usual
+// case: the transaction shouldn't have happened); pass revert_balance:false to
+// remove the ledger entry only and leave the account balance untouched (e.g. a
+// duplicate SMS where the balance already reflects the real one). Recoverable
+// via /restore, which mirrors whichever choice was made here.
 app.delete('/transactions/:id', async (req, res) => {
   const { id } = req.params;
+  const revertBalance = req.body?.revert_balance !== false;
   const client = await pool.connect();
   try {
     const txRes = await client.query('SELECT * FROM transactions WHERE id = $1 AND deleted_at IS NULL', [id]);
     if (txRes.rows.length === 0) return res.status(404).json({ error: 'not found' });
     const tx = txRes.rows[0];
 
-    const accountRes = await client.query('SELECT * FROM accounts WHERE id = $1', [tx.account_id]);
-    const account = accountRes.rows[0];
-    const revertedBalance = tx.direction === 'income'
-      ? Number(account.balance_rial) - Number(tx.amount_rial)
-      : Number(account.balance_rial) + Number(tx.amount_rial);
-    await client.query('UPDATE accounts SET balance_rial = $1 WHERE id = $2', [revertedBalance, tx.account_id]);
-    await client.query('UPDATE transactions SET deleted_at = now() WHERE id = $1', [id]);
+    if (revertBalance) {
+      const accountRes = await client.query('SELECT * FROM accounts WHERE id = $1', [tx.account_id]);
+      const account = accountRes.rows[0];
+      const revertedBalance = tx.direction === 'income'
+        ? Number(account.balance_rial) - Number(tx.amount_rial)
+        : Number(account.balance_rial) + Number(tx.amount_rial);
+      await client.query('UPDATE accounts SET balance_rial = $1 WHERE id = $2', [revertedBalance, tx.account_id]);
+    }
+    await client.query('UPDATE transactions SET deleted_at = now(), balance_reverted = $1 WHERE id = $2', [revertBalance, id]);
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -262,7 +276,8 @@ app.delete('/transactions/:id', async (req, res) => {
   }
 });
 
-// Restore a soft-deleted transaction (re-applies its balance effect).
+// Restore a soft-deleted transaction. Mirrors what the delete did: only
+// re-applies the balance effect if the delete had reverted it.
 app.post('/transactions/:id/restore', async (req, res) => {
   const { id } = req.params;
   const client = await pool.connect();
@@ -271,12 +286,14 @@ app.post('/transactions/:id/restore', async (req, res) => {
     if (txRes.rows.length === 0) return res.status(404).json({ error: 'not found' });
     const tx = txRes.rows[0];
 
-    const accountRes = await client.query('SELECT * FROM accounts WHERE id = $1', [tx.account_id]);
-    const account = accountRes.rows[0];
-    const restoredBalance = tx.direction === 'income'
-      ? Number(account.balance_rial) + Number(tx.amount_rial)
-      : Number(account.balance_rial) - Number(tx.amount_rial);
-    await client.query('UPDATE accounts SET balance_rial = $1 WHERE id = $2', [restoredBalance, tx.account_id]);
+    if (tx.balance_reverted) {
+      const accountRes = await client.query('SELECT * FROM accounts WHERE id = $1', [tx.account_id]);
+      const account = accountRes.rows[0];
+      const restoredBalance = tx.direction === 'income'
+        ? Number(account.balance_rial) + Number(tx.amount_rial)
+        : Number(account.balance_rial) - Number(tx.amount_rial);
+      await client.query('UPDATE accounts SET balance_rial = $1 WHERE id = $2', [restoredBalance, tx.account_id]);
+    }
     await client.query('UPDATE transactions SET deleted_at = NULL WHERE id = $1', [id]);
     res.json({ ok: true });
   } catch (err) {
