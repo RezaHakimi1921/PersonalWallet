@@ -109,4 +109,5 @@ INSERT INTO categories (name, direction) VALUES
   ('ناشناخته', 'expense'),
   ('درآمد کار', 'income'),
   ('درآمد شخصی', 'income'),
+  ('وام دریافتی', 'income'),
   ('ناشناخته', 'income');
