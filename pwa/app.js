@@ -1423,25 +1423,37 @@ async function renderCategories() {
   });
 }
 
+function shiftJalaliMonth(jy, jm, delta) {
+  let ty = jy, tm = jm + delta;
+  while (tm < 1) { tm += 12; ty -= 1; }
+  while (tm > 12) { tm -= 12; ty += 1; }
+  return { jy: ty, jm: tm };
+}
+
+let analyticsMonth = null; // {jy, jm} — the month currently being browsed; null = current month
+
 async function renderAnalytics() {
   const [txs, categories] = await Promise.all([api('/transactions'), api('/categories')]);
   const confirmed = txs.filter((t) => t.status === 'confirmed' && !isNonFlowCategory(t.category_name));
 
   const now = new Date();
   const nowJalali = Jalali.toJalaali(now.getFullYear(), now.getMonth() + 1, now.getDate());
-  const inJalaliMonth = (d, monthsAgo) => {
+  if (!analyticsMonth) analyticsMonth = { jy: nowJalali.jy, jm: nowJalali.jm };
+  const selY = analyticsMonth.jy, selM = analyticsMonth.jm;
+  const isCurrentMonth = selY === nowJalali.jy && selM === nowJalali.jm;
+  const prevMonth = shiftJalaliMonth(selY, selM, -1);
+
+  const inJalaliYM = (d, jy, jm) => {
     const j = Jalali.toJalaali(d.getFullYear(), d.getMonth() + 1, d.getDate());
-    let ty = nowJalali.jy, tm = nowJalali.jm - monthsAgo;
-    while (tm < 1) { tm += 12; ty -= 1; }
-    return j.jy === ty && j.jm === tm;
+    return j.jy === jy && j.jm === jm;
   };
-  const thisMonthExpense = confirmed.filter((t) => t.direction === 'expense' && inJalaliMonth(new Date(t.created_at), 0));
-  const lastMonthExpense = confirmed.filter((t) => t.direction === 'expense' && inJalaliMonth(new Date(t.created_at), 1));
+  const thisMonthExpense = confirmed.filter((t) => t.direction === 'expense' && inJalaliYM(new Date(t.created_at), selY, selM));
+  const lastMonthExpense = confirmed.filter((t) => t.direction === 'expense' && inJalaliYM(new Date(t.created_at), prevMonth.jy, prevMonth.jm));
   const thisSum = thisMonthExpense.reduce((s, t) => s + Number(t.amount_rial), 0);
   const lastSum = lastMonthExpense.reduce((s, t) => s + Number(t.amount_rial), 0);
   const trendPercent = lastSum > 0 ? Math.round(((thisSum - lastSum) / lastSum) * 100) : null;
 
-  // Top spending categories this month
+  // Top spending categories in the selected month
   const byCategory = {};
   thisMonthExpense.forEach((t) => {
     const name = t.category_name || 'بدون دسته';
@@ -1450,7 +1462,7 @@ async function renderAnalytics() {
   const topCategories = Object.entries(byCategory).sort((a, b) => b[1] - a[1]).slice(0, 8);
   const maxCategoryAmount = topCategories[0]?.[1] || 1;
 
-  // Weekday heatmap (Saturday..Friday), this month
+  // Weekday heatmap (Saturday..Friday), selected month
   const weekdayNames = ['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه'];
   const weekdaySums = [0, 0, 0, 0, 0, 0, 0];
   thisMonthExpense.forEach((t) => {
@@ -1460,8 +1472,8 @@ async function renderAnalytics() {
   });
   const maxWeekday = Math.max(...weekdaySums, 1);
 
-  // Calendar heatmap for this Jalali month
-  const daysInMonth = Jalali.monthLength(nowJalali.jy, nowJalali.jm);
+  // Calendar heatmap for the selected Jalali month
+  const daysInMonth = Jalali.monthLength(selY, selM);
   const dailySums = {};
   thisMonthExpense.forEach((t) => {
     const d = new Date(t.created_at);
@@ -1469,7 +1481,7 @@ async function renderAnalytics() {
     dailySums[j.jd] = (dailySums[j.jd] || 0) + Number(t.amount_rial);
   });
   const maxDaily = Math.max(...Object.values(dailySums), 1);
-  const firstOfMonthG = Jalali.toGregorian(nowJalali.jy, nowJalali.jm, 1);
+  const firstOfMonthG = Jalali.toGregorian(selY, selM, 1);
   const firstWeekday = (new Date(firstOfMonthG.gy, firstOfMonthG.gm - 1, firstOfMonthG.gd).getDay() + 1) % 7; // align to Saturday-start week
 
   let calendarCells = '';
@@ -1478,14 +1490,30 @@ async function renderAnalytics() {
     const amount = dailySums[day] || 0;
     const intensity = amount / maxDaily;
     const bg = amount === 0 ? 'var(--surface-2)' : `rgba(248,113,113,${0.15 + intensity * 0.7})`;
-    const isToday = day === nowJalali.jd;
+    const isToday = isCurrentMonth && day === nowJalali.jd;
     calendarCells += `<div class="cal-cell" style="background:${bg};${isToday ? 'border-color:var(--gold);border-width:2px' : ''}" title="${amount ? toman(amount) + ' ریال' : ''}">${day}</div>`;
   }
+
+  // Comparison: last 6 Jalali months, expense vs income vs net
+  const last6 = [];
+  for (let i = 5; i >= 0; i--) {
+    const { jy, jm } = shiftJalaliMonth(nowJalali.jy, nowJalali.jm, -i);
+    const monthTxs = confirmed.filter((t) => inJalaliYM(new Date(t.created_at), jy, jm));
+    const exp = monthTxs.filter((t) => t.direction === 'expense').reduce((s, t) => s + Number(t.amount_rial), 0);
+    const inc = monthTxs.filter((t) => t.direction === 'income').reduce((s, t) => s + Number(t.amount_rial), 0);
+    last6.push({ jy, jm, exp, inc, net: inc - exp });
+  }
+  const maxLast6 = Math.max(...last6.map((m) => Math.max(m.exp, m.inc)), 1);
 
   content.innerHTML = `
     <div class="card">
       <div class="row">
-        <span class="muted">هزینه این ماه نسبت به ماه قبل</span>
+        <button id="an-prev-month" class="action secondary" style="width:auto;padding:4px 12px">‹</button>
+        <strong>${JALALI_MONTH_NAMES[selM - 1]} ${selY}</strong>
+        <button id="an-next-month" class="action secondary" style="width:auto;padding:4px 12px" ${isCurrentMonth ? 'disabled' : ''}>›</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <span class="muted">هزینه نسبت به ماه قبل</span>
         ${trendPercent != null ? `<strong class="${trendPercent >= 0 ? 'trend-up' : 'trend-down'} font-num">${trendPercent >= 0 ? '▲' : '▼'} ${Math.abs(trendPercent)}٪</strong>` : '<span class="muted">داده‌ی ماه قبل نیست</span>'}
       </div>
       <div class="row muted font-num" style="margin-top:6px;font-size:.75rem">
@@ -1495,7 +1523,18 @@ async function renderAnalytics() {
     </div>
 
     <div class="card">
-      <strong>پرخرج‌ترین دسته‌ها (این ماه)</strong>
+      <strong>مقایسه‌ی ۶ ماه اخیر (هزینه/درآمد)</strong>
+      ${last6.map((m) => `
+        <div style="margin-top:8px">
+          <div class="row muted" style="font-size:.7rem"><span>${JALALI_MONTH_NAMES[m.jm - 1]} ${m.jy}</span><span class="font-num ${m.net >= 0 ? 'trend-up' : 'trend-down'}">خالص: ${toman(m.net)}</span></div>
+          <div class="bar-row"><span style="font-size:.65rem;width:35px;flex-shrink:0;color:var(--red)">هزینه</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(m.exp / maxLast6 * 100)}%;background:var(--red)"></div></div><span class="font-num" style="font-size:.65rem;width:auto;flex-shrink:0">${toman(m.exp)}</span></div>
+          <div class="bar-row"><span style="font-size:.65rem;width:35px;flex-shrink:0;color:var(--green)">درآمد</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(m.inc / maxLast6 * 100)}%;background:var(--green)"></div></div><span class="font-num" style="font-size:.65rem;width:auto;flex-shrink:0">${toman(m.inc)}</span></div>
+        </div>
+      `).join('')}
+    </div>
+
+    <div class="card">
+      <strong>پرخرج‌ترین دسته‌ها (${JALALI_MONTH_NAMES[selM - 1]})</strong>
       ${topCategories.length === 0 ? '<p class="muted">هزینه‌ای ثبت نشده.</p>' : topCategories.map(([name, amount]) => `
         <div class="bar-row">
           <span style="font-size:.75rem;width:90px;flex-shrink:0">${name}</span>
@@ -1506,7 +1545,7 @@ async function renderAnalytics() {
     </div>
 
     <div class="card">
-      <strong>هزینه به تفکیک روز هفته (این ماه)</strong>
+      <strong>هزینه به تفکیک روز هفته (${JALALI_MONTH_NAMES[selM - 1]})</strong>
       ${weekdayNames.map((name, i) => `
         <div class="weekday-bar-row">
           <span style="font-size:.7rem;width:55px;flex-shrink:0">${name}</span>
@@ -1517,7 +1556,7 @@ async function renderAnalytics() {
     </div>
 
     <div class="card">
-      <strong>تقویم هزینه (${JALALI_MONTH_NAMES[nowJalali.jm - 1]} ${nowJalali.jy})</strong>
+      <strong>تقویم هزینه (${JALALI_MONTH_NAMES[selM - 1]} ${selY})</strong>
       <div class="muted" style="font-size:.7rem;margin-top:4px">هرچه رنگ پررنگ‌تر، هزینه‌ی اون روز بیشتره</div>
       <div class="cal-grid">
         ${weekdayNames.map((n) => `<div class="muted" style="text-align:center;font-size:.6rem">${n[0]}</div>`).join('')}
@@ -1525,6 +1564,16 @@ async function renderAnalytics() {
       </div>
     </div>
   `;
+
+  document.getElementById('an-prev-month').addEventListener('click', () => {
+    analyticsMonth = shiftJalaliMonth(selY, selM, -1);
+    renderAnalytics();
+  });
+  document.getElementById('an-next-month').addEventListener('click', () => {
+    if (isCurrentMonth) return;
+    analyticsMonth = shiftJalaliMonth(selY, selM, 1);
+    renderAnalytics();
+  });
 }
 
 async function renderDebts() {
