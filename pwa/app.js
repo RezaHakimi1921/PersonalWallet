@@ -1023,27 +1023,50 @@ async function renderInstallments() {
   });
 
   document.querySelectorAll('[data-edit-inst]').forEach((b) => {
-    onClickLocked(b, async () => {
-      const item = items.find((i) => i.id === Number(b.dataset.editInst));
-      const newTitle = prompt('عنوان:', item.title);
-      if (newTitle == null) return;
-      const newAmount = prompt('مبلغ هر قسط (ریال):', toman(item.installment_amount_rial));
-      if (newAmount == null) return;
-      const newCount = prompt('تعداد کل اقساط:', item.total_count);
-      if (newCount == null) return;
-      const newDay = prompt('روز موعد در ماه:', item.due_day_of_month);
-      if (newDay == null) return;
-      await api(`/installments/${item.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          title: newTitle,
-          installment_amount_rial: Number(newAmount.replace(/,/g, '')),
-          total_count: Number(newCount),
-          due_day_of_month: Number(newDay),
-        }),
-      });
-      renderInstallments();
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openInstallmentModal(items.find((i) => i.id === Number(b.dataset.editInst)));
     });
+  });
+}
+
+function openInstallmentModal(item) {
+  manualModal.innerHTML = `
+    <div class="card">
+      <strong>ویرایش قسط/وام</strong>
+      <input id="inst-title" placeholder="عنوان" value="${item.title}" />
+      <input id="inst-amount" type="text" inputmode="numeric" placeholder="مبلغ هر قسط (ریال)" value="${toman(item.installment_amount_rial)}" />
+      <div class="grid2">
+        <input id="inst-total" type="text" inputmode="numeric" placeholder="تعداد کل اقساط" value="${item.total_count}" />
+        <input id="inst-paid" type="text" inputmode="numeric" placeholder="تعداد پرداخت‌شده" value="${item.paid_count}" />
+      </div>
+      <input id="inst-day" type="text" inputmode="numeric" placeholder="روز موعد در ماه (شمسی)" value="${item.due_day_of_month}" />
+      <button class="action" id="inst-save">ذخیره</button>
+      <button class="action secondary" id="inst-cancel">انصراف</button>
+    </div>
+  `;
+  manualModal.hidden = false;
+  wireThousandsInput('inst-amount');
+  wireThousandsInput('inst-total');
+  wireThousandsInput('inst-paid');
+  wireThousandsInput('inst-day');
+
+  document.getElementById('inst-cancel').addEventListener('click', () => { manualModal.hidden = true; });
+  onClickLocked(document.getElementById('inst-save'), async () => {
+    const title = document.getElementById('inst-title').value;
+    if (!title) return;
+    await api(`/installments/${item.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        title,
+        installment_amount_rial: numFromInput('inst-amount'),
+        total_count: numFromInput('inst-total'),
+        paid_count: numFromInput('inst-paid'),
+        due_day_of_month: numFromInput('inst-day'),
+      }),
+    });
+    manualModal.hidden = true;
+    renderInstallments();
   });
 }
 
