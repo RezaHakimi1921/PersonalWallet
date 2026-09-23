@@ -553,23 +553,27 @@ app.post('/investments', async (req, res) => {
 
 app.put('/investments/:id', async (req, res) => {
   const { id } = req.params;
-  const { current_value_rial, current_unit_price_rial, note } = req.body || {};
+  const { title, quantity, purchase_unit_price_rial, invested_amount_rial, current_value_rial, current_unit_price_rial, note } = req.body || {};
   const client = await pool.connect();
   try {
     let resolvedCurrentValue = current_value_rial;
-    if (current_unit_price_rial != null) {
+    if (current_unit_price_rial != null && quantity == null) {
       const invRes = await client.query('SELECT quantity FROM investments WHERE id = $1', [id]);
-      const quantity = invRes.rows[0]?.quantity;
-      if (quantity != null) resolvedCurrentValue = Math.round(Number(quantity) * Number(current_unit_price_rial));
+      const existingQuantity = invRes.rows[0]?.quantity;
+      if (existingQuantity != null) resolvedCurrentValue = Math.round(Number(existingQuantity) * Number(current_unit_price_rial));
     }
     const result = await client.query(
       `UPDATE investments SET
-         current_value_rial = COALESCE($1, current_value_rial),
-         current_unit_price_rial = COALESCE($2, current_unit_price_rial),
-         note = COALESCE($3, note),
+         title = COALESCE($1, title),
+         quantity = COALESCE($2, quantity),
+         purchase_unit_price_rial = COALESCE($3, purchase_unit_price_rial),
+         invested_amount_rial = COALESCE($4, invested_amount_rial),
+         current_value_rial = COALESCE($5, current_value_rial),
+         current_unit_price_rial = COALESCE($6, current_unit_price_rial),
+         note = COALESCE($7, note),
          updated_at = now()
-       WHERE id = $4 RETURNING *`,
-      [resolvedCurrentValue ?? null, current_unit_price_rial ?? null, note ?? null, id]
+       WHERE id = $8 RETURNING *`,
+      [title ?? null, quantity ?? null, purchase_unit_price_rial ?? null, invested_amount_rial ?? null, resolvedCurrentValue ?? null, current_unit_price_rial ?? null, note ?? null, id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
     res.json(result.rows[0]);

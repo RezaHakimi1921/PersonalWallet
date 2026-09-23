@@ -455,16 +455,60 @@ async function renderOverview() {
   document.getElementById('goto-installments')?.addEventListener('click', () => setActiveTab('installments'));
 }
 
+// Suggest a category from transaction history: for a given direction+amount, pick
+// whichever category was used most often before (e.g. a recurring 20,000 toman
+// expense almost always gets the same category).
+function buildAmountCategoryHistogram(transactions) {
+  const histogram = {};
+  for (const t of transactions) {
+    if (!t.category_id) continue;
+    const key = `${t.direction}:${t.amount_rial}`;
+    histogram[key] = histogram[key] || {};
+    histogram[key][t.category_id] = (histogram[key][t.category_id] || 0) + 1;
+  }
+  return histogram;
+}
+
+function suggestCategoryId(histogram, direction, amount_rial) {
+  const counts = histogram[`${direction}:${amount_rial}`];
+  if (!counts) return null;
+  let bestId = null, bestCount = 0;
+  for (const [catId, count] of Object.entries(counts)) {
+    if (count > bestCount) { bestCount = count; bestId = catId; }
+  }
+  return bestId;
+}
+
+// Wires an amount input so that, as soon as it matches a previously-used amount,
+// the linked category <select> is preset to whatever category was picked before
+// (and a 'change' event is fired so any conditional fields tied to it react too).
+function wireCategorySuggestion(amountInputId, catSelectId, getDirection, histogram) {
+  const amountInput = document.getElementById(amountInputId);
+  const catSelect = document.getElementById(catSelectId);
+  const apply = () => {
+    const amount_rial = numFromInput(amountInputId);
+    if (!amount_rial) return;
+    const suggested = suggestCategoryId(histogram, getDirection(), amount_rial);
+    if (suggested && [...catSelect.options].some((o) => o.value === String(suggested))) {
+      catSelect.value = String(suggested);
+      catSelect.dispatchEvent(new Event('change'));
+    }
+  };
+  amountInput.addEventListener('input', apply);
+  return apply;
+}
+
 async function renderPending() {
-  const [txs, cats, accounts, debts] = await Promise.all([
-    api('/transactions?status=pending'), api('/categories'), api('/accounts'), api('/debts'),
+  const [txs, cats, accounts, debts, allTxs] = await Promise.all([
+    api('/transactions?status=pending'), api('/categories'), api('/accounts'), api('/debts'), api('/transactions'),
   ]);
   if (txs.length === 0) {
     content.innerHTML = '<p class="muted">تراکنش در انتظاری وجود ندارد.</p>';
     return;
   }
+  const histogram = buildAmountCategoryHistogram(allTxs);
   content.innerHTML = txs.map((t) => txCard(t, cats, true, accounts)).join('');
-  txs.forEach((t) => wireTxCard(t, cats, accounts, debts));
+  txs.forEach((t) => wireTxCard(t, cats, accounts, debts, histogram));
 }
 
 const TRANSFER_CATEGORY_NAME = 'انتقال وجه بین حساب';
@@ -672,7 +716,10 @@ async function renderTransactions() {
         </div>
         <div class="row">
           <div class="muted">${t.account_name} · ${t.category_name || 'بدون دسته'}${t.note ? ' · ' + t.note : ''}${t.tags ? ' · 🏷 ' + t.tags : ''}</div>
-          <button class="action secondary" data-edit-tx="${t.id}" style="width:auto;padding:4px 10px;margin:0">✎</button>
+          <div class="row" style="width:auto;gap:6px">
+            <button class="action secondary" data-edit-tx="${t.id}" style="width:auto;padding:4px 10px;margin:0">✎</button>
+            <button class="action danger" data-delete-tx="${t.id}" style="width:auto;padding:4px 10px;margin:0">🗑</button>
+          </div>
         </div>
       </div>
     `).join('')}
@@ -687,6 +734,13 @@ async function renderTransactions() {
   document.getElementById('tx-next').addEventListener('click', () => { txPage++; renderTransactions(); });
   document.querySelectorAll('[data-edit-tx]').forEach((b) => {
     b.addEventListener('click', () => openEditTxModal(txs.find((t) => t.id === Number(b.dataset.editTx))));
+  });
+  document.querySelectorAll('[data-delete-tx]').forEach((b) => {
+    onClickLocked(b, async () => {
+      if (!confirm('این تراکنش حذف شود؟ موجودی حساب به حالت قبل برمی‌گردد.')) return;
+      await api(`/transactions/${b.dataset.deleteTx}`, { method: 'DELETE' });
+      renderTransactions();
+    });
   });
   wireTxFilters();
 }
@@ -797,7 +851,7 @@ function txCard(t, cats, editable, accounts) {
   `;
 }
 
-function wireTxCard(t, cats, accounts, debts) {
+function wireTxCard(t, cats, accounts, debts, histogram) {
   const btn = document.getElementById(`confirm-${t.id}`);
   if (!btn) return;
   wireThousandsInput(`amount-${t.id}`);
@@ -805,6 +859,7 @@ function wireTxCard(t, cats, accounts, debts) {
   wireLoanField(`cat-${t.id}`, `loan-person-${t.id}`, cats);
   wireRepayField(`cat-${t.id}`, () => t.direction, `repay-debt-${t.id}`, cats, debts || []);
   wireBankLoanField(`cat-${t.id}`, `bank-loan-${t.id}`, cats);
+  if (histogram) wireCategorySuggestion(`amount-${t.id}`, `cat-${t.id}`, () => t.direction, histogram)();
   onClickLocked(btn, async () => {
     const category_id = document.getElementById(`cat-${t.id}`).value || null;
     let note = document.getElementById(`note-${t.id}`).value || null;
@@ -1196,7 +1251,10 @@ async function renderInvestments() {
     <div class="card">
       <div class="row">
         <strong>${v.title}</strong>
-        <span class="badge ${gainPercent >= 0 ? 'gain' : 'loss'}">${gainPercent >= 0 ? '+' : ''}${gainPercent}%</span>
+        <div class="row" style="width:auto;gap:6px">
+          <span class="badge ${gainPercent >= 0 ? 'gain' : 'loss'}">${gainPercent >= 0 ? '+' : ''}${gainPercent}%</span>
+          <button data-edit-inv="${v.id}" class="action secondary" style="width:auto;padding:4px 8px;font-size:.7rem">✎</button>
+        </div>
       </div>
       ${unitLabel ? `<div class="muted font-num">${v.quantity} ${unitLabel} · خرید هر واحد: ${toman(v.purchase_unit_price_rial)} ریال</div>` : ''}
       <div class="muted privacy-target font-num">مبلغ اولیه: ${toman(v.invested_amount_rial)} ریال</div>
@@ -1274,6 +1332,52 @@ async function renderInvestments() {
       await api(`/investments/${id}`, { method: 'PUT', body: JSON.stringify({ current_value_rial: val }) });
       renderInvestments();
     });
+  });
+
+  document.querySelectorAll('[data-edit-inv]').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openInvestmentModal(items.find((v) => v.id === Number(b.dataset.editInv)));
+    });
+  });
+}
+
+function openInvestmentModal(item) {
+  const unitLabel = { gold: 'گرم', coin: 'عدد', dollar: 'دلار' }[item.asset_type] || null;
+  manualModal.innerHTML = `
+    <div class="card">
+      <strong>ویرایش سرمایه‌گذاری</strong>
+      <input id="inv-title" placeholder="عنوان" value="${item.title}" />
+      ${unitLabel ? `
+        <div class="grid2">
+          <input id="inv-qty" type="text" inputmode="decimal" placeholder="مقدار (${unitLabel})" value="${item.quantity}" />
+          <input id="inv-purchase-price" type="text" inputmode="numeric" placeholder="قیمت خرید هر واحد (ریال)" value="${toman(item.purchase_unit_price_rial)}" />
+        </div>
+      ` : ''}
+      <input id="inv-invested" type="text" inputmode="numeric" placeholder="مبلغ اولیه (ریال)" value="${toman(item.invested_amount_rial)}" />
+      <button class="action" id="inv-save">ذخیره</button>
+      <button class="action secondary" id="inv-cancel">انصراف</button>
+    </div>
+  `;
+  manualModal.hidden = false;
+  if (unitLabel) wireThousandsInput('inv-purchase-price');
+  wireThousandsInput('inv-invested');
+
+  document.getElementById('inv-cancel').addEventListener('click', () => { manualModal.hidden = true; });
+  onClickLocked(document.getElementById('inv-save'), async () => {
+    const title = document.getElementById('inv-title').value;
+    if (!title) return;
+    const body = {
+      title,
+      invested_amount_rial: numFromInput('inv-invested'),
+    };
+    if (unitLabel) {
+      body.quantity = Number(document.getElementById('inv-qty').value) || null;
+      body.purchase_unit_price_rial = numFromInput('inv-purchase-price');
+    }
+    await api(`/investments/${item.id}`, { method: 'PUT', body: JSON.stringify(body) });
+    manualModal.hidden = true;
+    renderInvestments();
   });
 }
 
@@ -1676,7 +1780,8 @@ const fab = document.getElementById('fab');
 const manualModal = document.getElementById('manual-modal');
 
 async function openManualModal() {
-  const [accounts, cats, debts] = await Promise.all([api('/accounts'), api('/categories'), api('/debts')]);
+  const [accounts, cats, debts, allTxs] = await Promise.all([api('/accounts'), api('/categories'), api('/debts'), api('/transactions')]);
+  const histogram = buildAmountCategoryHistogram(allTxs);
   const accountOptions = accounts.map((a) => `<option value="${a.id}">${a.display_name}</option>`).join('');
   const renderCatOptions = (direction) => cats
     .filter((c) => c.direction === direction)
@@ -1707,9 +1812,11 @@ async function openManualModal() {
   wireThousandsInput('m-amount');
 
   const updateRepayM = wireRepayField('m-category', () => document.getElementById('m-direction').value, 'repay-debt-m', cats, debts);
+  const applySuggestionM = wireCategorySuggestion('m-amount', 'm-category', () => document.getElementById('m-direction').value, histogram);
   document.getElementById('m-direction').addEventListener('change', (e) => {
     document.getElementById('m-category').innerHTML = renderCatOptions(e.target.value);
     updateRepayM();
+    applySuggestionM();
   });
   wireTransferField('m-category', 'other-account-m', cats);
   wireLoanField('m-category', 'loan-person-m', cats);
