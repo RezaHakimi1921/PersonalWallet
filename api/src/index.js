@@ -170,15 +170,28 @@ function normalizeIranianPhone(raw) {
   return /^09\d{9}$/.test(p) ? p : null;
 }
 
-// Sends a one-time code via Kavenegar (https://kavenegar.com), a common Iranian SMS
-// provider. Requires KAVENEGAR_API_KEY; without it, OTP requests fail loudly instead
-// of silently pretending to succeed.
+// Sends a one-time code via ASA SMS (https://asasms.com), using their pattern-send
+// API so the message goes out instantly without per-message manual review. Needs
+// a pattern created in the ASA panel (keyword "code") plus its id, an API key, and
+// a sender line -- without all three, OTP requests fail loudly instead of silently
+// pretending to succeed.
 async function sendOtpSms(phone, code) {
-  const apiKey = process.env.KAVENEGAR_API_KEY;
-  if (!apiKey) throw new Error('KAVENEGAR_API_KEY تنظیم نشده — از سرور یه کلید کاوه‌نگار بگیر و بذار توی .env');
-  const message = `کد تأیید کیف پول شخصی: ${code}`;
-  const url = `https://api.kavenegar.com/v1/${apiKey}/sms/send.json?receptor=${encodeURIComponent(phone)}&message=${encodeURIComponent(message)}`;
-  const res = await fetch(url);
+  const apiKey = process.env.ASA_API_KEY;
+  const from = process.env.ASA_SENDER;
+  const patternId = process.env.ASA_PATTERN_ID;
+  if (!apiKey || !from || !patternId) {
+    throw new Error('تنظیمات ASA SMS کامل نیست (ASA_API_KEY / ASA_SENDER / ASA_PATTERN_ID) — این‌ها باید توی .env سرور ست بشن');
+  }
+  const res = await fetch('https://api-payamak.com/api/v3/rest/sms/pattern-send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: apiKey },
+    body: JSON.stringify({
+      from,
+      recipients: [phone],
+      message: { code },
+      pattern_id: Number(patternId),
+    }),
+  });
   const data = await res.json();
   if (!res.ok || data?.return?.status !== 200) {
     throw new Error(data?.return?.message || 'ارسال پیامک OTP ناموفق بود');
