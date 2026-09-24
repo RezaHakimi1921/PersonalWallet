@@ -200,8 +200,14 @@ async function sendOtpSms(phone, code) {
 
 const OTP_TTL_MS = 2 * 60 * 1000;
 const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
+// Off until ASA SMS is actually wired up (needs a real domain + an approved pattern).
+// Toggle by setting OTP_ENABLED=true in .env once that's ready -- nothing else to change.
+const OTP_ENABLED = process.env.OTP_ENABLED === 'true';
+
+app.get('/auth/config', (req, res) => res.json({ otp_enabled: OTP_ENABLED }));
 
 app.post('/auth/request-otp', async (req, res) => {
+  if (!OTP_ENABLED) return res.json({ ok: true, skipped: true });
   const phone = normalizeIranianPhone(req.body?.phone);
   if (!phone) return res.status(400).json({ error: 'شماره موبایل معتبر نیست' });
   try {
@@ -227,16 +233,19 @@ app.post('/auth/request-otp', async (req, res) => {
 app.post('/auth/register', async (req, res) => {
   const phone = normalizeIranianPhone(req.body?.phone);
   const { password, otp } = req.body || {};
-  if (!phone || !password || password.length < 6 || !otp) {
-    return res.status(400).json({ error: 'شماره موبایل، رمز عبور (۶ رقم یا بیشتر) و کد تأیید لازمه' });
+  if (!phone || !password || password.length < 6 || (OTP_ENABLED && !otp)) {
+    return res.status(400).json({ error: `شماره موبایل، رمز عبور (۶ رقم یا بیشتر)${OTP_ENABLED ? ' و کد تأیید' : ''} لازمه` });
   }
   try {
-    const otpRes = await pool.query(
-      `SELECT * FROM otp_codes WHERE phone = $1 AND code = $2 AND purpose = 'register' AND consumed = false AND expires_at > now()
-       ORDER BY created_at DESC LIMIT 1`,
-      [phone, String(otp)]
-    );
-    if (otpRes.rows.length === 0) return res.status(400).json({ error: 'کد تأیید اشتباهه یا منقضی شده' });
+    if (OTP_ENABLED) {
+      const otpRes = await pool.query(
+        `SELECT * FROM otp_codes WHERE phone = $1 AND code = $2 AND purpose = 'register' AND consumed = false AND expires_at > now()
+         ORDER BY created_at DESC LIMIT 1`,
+        [phone, String(otp)]
+      );
+      if (otpRes.rows.length === 0) return res.status(400).json({ error: 'کد تأیید اشتباهه یا منقضی شده' });
+      await pool.query('UPDATE otp_codes SET consumed = true WHERE id = $1', [otpRes.rows[0].id]);
+    }
 
     const password_hash = await bcrypt.hash(password, 10);
     const api_key = crypto.randomBytes(24).toString('hex');
@@ -245,7 +254,6 @@ app.post('/auth/register', async (req, res) => {
       [phone, password_hash, api_key]
     );
     const user = result.rows[0];
-    await pool.query('UPDATE otp_codes SET consumed = true WHERE id = $1', [otpRes.rows[0].id]);
     await backfillDefaultUser();
     res.cookie('session', signToken(user.id), COOKIE_OPTS);
     res.json({ ok: true, phone: user.phone });

@@ -249,33 +249,50 @@ function renderAuthForm(mode) {
     return;
   }
 
-  // Registration step 1: phone + password -> request an OTP sent to that phone.
-  authForm.innerHTML = `
-    <input id="auth-phone" placeholder="شماره موبایل (09xxxxxxxxx)" inputmode="tel" autocomplete="tel" />
-    <input id="auth-password" type="password" placeholder="رمز عبور (حداقل ۶ کاراکتر)" autocomplete="new-password" />
-    <div id="auth-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
-    <button class="action" id="auth-submit">دریافت کد تأیید</button>
-    <button class="action secondary" id="auth-toggle">قبلاً ثبت‌نام کردی؟ وارد شو</button>
-  `;
-  document.getElementById('auth-toggle').addEventListener('click', () => renderAuthForm('login'));
-  onClickLocked(document.getElementById('auth-submit'), async () => {
-    const phone = document.getElementById('auth-phone').value.trim();
-    const password = document.getElementById('auth-password').value;
-    const errorEl = document.getElementById('auth-error');
-    errorEl.textContent = '';
-    if (!phone || !password || password.length < 6) { errorEl.textContent = 'شماره موبایل و رمز عبور (حداقل ۶ کاراکتر) رو وارد کن'; return; }
-    try {
-      const res = await fetch(`${API}/auth/request-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone }),
-      });
-      const data = await res.json();
-      if (!res.ok) { errorEl.textContent = data.error || 'ارسال کد ناموفق بود'; return; }
-      renderOtpStep(phone, password);
-    } catch (e) {
-      errorEl.textContent = 'اتصال برقرار نشد';
-    }
+  // Registration step 1: phone + password. Whether this leads to an OTP step (step 2)
+  // or registers right away depends on the server's /auth/config (OTP_ENABLED) --
+  // OTP is off until ASA SMS is fully wired up, without deleting any of that code.
+  authForm.innerHTML = `<div class="muted" style="font-size:.8rem">در حال بارگذاری...</div>`;
+  fetch(`${API}/auth/config`).then((r) => r.json()).catch(() => ({ otp_enabled: false })).then((config) => {
+    const otpEnabled = !!config.otp_enabled;
+    authForm.innerHTML = `
+      <input id="auth-phone" placeholder="شماره موبایل (09xxxxxxxxx)" inputmode="tel" autocomplete="tel" />
+      <input id="auth-password" type="password" placeholder="رمز عبور (حداقل ۶ کاراکتر)" autocomplete="new-password" />
+      <div id="auth-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
+      <button class="action" id="auth-submit">${otpEnabled ? 'دریافت کد تأیید' : 'ثبت‌نام'}</button>
+      <button class="action secondary" id="auth-toggle">قبلاً ثبت‌نام کردی؟ وارد شو</button>
+    `;
+    document.getElementById('auth-toggle').addEventListener('click', () => renderAuthForm('login'));
+    onClickLocked(document.getElementById('auth-submit'), async () => {
+      const phone = document.getElementById('auth-phone').value.trim();
+      const password = document.getElementById('auth-password').value;
+      const errorEl = document.getElementById('auth-error');
+      errorEl.textContent = '';
+      if (!phone || !password || password.length < 6) { errorEl.textContent = 'شماره موبایل و رمز عبور (حداقل ۶ کاراکتر) رو وارد کن'; return; }
+      try {
+        if (otpEnabled) {
+          const res = await fetch(`${API}/auth/request-otp`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone }),
+          });
+          const data = await res.json();
+          if (!res.ok) { errorEl.textContent = data.error || 'ارسال کد ناموفق بود'; return; }
+          renderOtpStep(phone, password);
+        } else {
+          const res = await fetch(`${API}/auth/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone, password }),
+          });
+          const data = await res.json();
+          if (!res.ok) { errorEl.textContent = data.error || 'خطایی پیش اومد'; return; }
+          await bootstrapApp();
+        }
+      } catch (e) {
+        errorEl.textContent = 'اتصال برقرار نشد';
+      }
+    });
   });
 }
 
