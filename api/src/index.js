@@ -144,7 +144,24 @@ function parseCookies(req) {
   return cookies;
 }
 
+// Temporary escape hatch while there's no real domain (so no https-safe place for
+// the login cookie to matter) and OTP is unreachable. Off means every request is
+// treated as the single existing user -- fine for one person, not for multi-user.
+// Flip AUTH_REQUIRED back to true (the default) once the domain + OTP are ready;
+// nothing else needs to change.
+const AUTH_REQUIRED = process.env.AUTH_REQUIRED !== 'false';
+
 function requireAuth(req, res, next) {
+  if (!AUTH_REQUIRED) {
+    pool.query('SELECT id FROM users ORDER BY id LIMIT 1')
+      .then((r) => {
+        if (r.rows.length === 0) return res.status(401).json({ error: 'no user registered yet' });
+        req.userId = r.rows[0].id;
+        next();
+      })
+      .catch((err) => { console.error(err); res.status(500).json({ error: 'internal error' }); });
+    return;
+  }
   const userId = verifyToken(parseCookies(req).session);
   if (!userId) return res.status(401).json({ error: 'unauthorized' });
   req.userId = userId;
