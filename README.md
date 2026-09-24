@@ -6,7 +6,7 @@
 - **بک‌اند**: Node.js (Express) + PostgreSQL
 - **فرانت‌اند**: PWA وانیلا جاوااسکریپت (بدون فریم‌ورک/بیلد استپ)
 - **دیپلوی**: Docker Compose (`db`, `api`, `caddy`) روی یه VPS
-- **HTTPS**: Caddy + Let's Encrypt (فعلاً روی دامنه‌ی موقت nip.io)
+- **دامنه**: `wallet.artepersia.com` — Caddy + Let's Encrypt (HTTPS خودکار). آدرس موقت قبلی (`78-39-51-105.nip.io`) هم هنوز فعاله، به‌عنوان fallback
 - **نوتیفیکیشن**: ntfy
 - **منبع داده**: پیامک بانکی از طریق iOS Shortcuts → وب‌هوک
 
@@ -31,7 +31,7 @@
 - پیامک OTP از طریق **ASA SMS** (`api-payamak.com`) با یه پترن ازپیش‌تعریف‌شده (کلمه‌ی کلیدی `code`) ارسال می‌شه. نیاز به `ASA_API_KEY`, `ASA_SENDER`, `ASA_PATTERN_ID` توی `.env`.
 
 ## کارهای باز / در انتظار
-- [ ] گرفتن دامنه‌ی `.com` واقعی (بحث «Arte Wallet» به‌عنوان اسم) و اتصال A Record به `78.39.51.105`
+- [x] گرفتن دامنه‌ی `.com` واقعی و وصل کردنش — `wallet.artepersia.com` فعاله، HTTPS واقعی داره
 - [ ] تأیید شدن پترن OTP توی پنل ASA SMS + گرفتن API Key/شماره خط/شناسه‌ی پترن
 - [ ] بعد از بالا: `OTP_ENABLED=true` و `AUTH_REQUIRED=true` روی سرور ست بشه
 - [ ] ساختن ۲ تا Shortcut باقی‌مونده (رسالت، پاسارگاد) — فقط بلو ساخته شده
