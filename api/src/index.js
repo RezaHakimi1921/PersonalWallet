@@ -4,6 +4,8 @@ const cron = require('node-cron');
 const jalaali = require('jalaali-js');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const soap = require('soap');
+const { OAuth2Client } = require('google-auth-library');
 
 const { parseSms } = require('./parsers');
 const { sendNtfy } = require('./ntfy');
@@ -97,6 +99,11 @@ async function migrateAuth() {
   // (nullable) only so any pre-existing rows aren't broken by the column going away.
   await pool.query(`ALTER TABLE users ALTER COLUMN username DROP NOT NULL`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT UNIQUE`);
+  // Sign in with Google: a second, independent way in, alongside phone+password.
+  // A Google-only account has no password, so password_hash has to be nullable too.
+  await pool.query(`ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT UNIQUE`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS otp_codes (
       id SERIAL PRIMARY KEY,
@@ -227,31 +234,37 @@ function normalizeIranianPhone(raw) {
   return /^09\d{9}$/.test(p) ? p : null;
 }
 
-// Sends a one-time code via ASA SMS (https://asasms.com), using their pattern-send
-// API so the message goes out instantly without per-message manual review. Needs
-// a pattern created in the ASA panel (keyword "code") plus its id, an API key, and
-// a sender line -- without all three, OTP requests fail loudly instead of silently
-// pretending to succeed.
+// Sends a one-time code via ASA SMS's actual account-specific SOAP API (their
+// generic REST docs turned out not to match this account's real panel -- the panel's
+// own "راهنما" page gives this WSDL instead). Needs a pattern created in the ASA
+// panel (keyword "code"), its id, a sender line, and the account token.
+const ASA_WSDL_URL = 'http://185.112.33.61/wbs/send.php?wsdl';
+let asaSoapClientPromise = null;
+function getAsaSoapClient() {
+  if (!asaSoapClientPromise) asaSoapClientPromise = soap.createClientAsync(ASA_WSDL_URL);
+  return asaSoapClientPromise;
+}
+
 async function sendOtpSms(phone, code) {
-  const apiKey = process.env.ASA_API_KEY;
-  const from = process.env.ASA_SENDER;
+  const token = process.env.ASA_API_KEY;
+  const fromNum = process.env.ASA_SENDER;
   const patternId = process.env.ASA_PATTERN_ID;
-  if (!apiKey || !from || !patternId) {
+  if (!token || !fromNum || !patternId) {
     throw new Error('تنظیمات ASA SMS کامل نیست (ASA_API_KEY / ASA_SENDER / ASA_PATTERN_ID) — این‌ها باید توی .env سرور ست بشن');
   }
-  const res = await fetch('https://api-payamak.com/api/v3/rest/sms/pattern-send', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: apiKey },
-    body: JSON.stringify({
-      from,
-      recipients: [phone],
-      message: { code },
-      pattern_id: Number(patternId),
-    }),
+  const toNum = phone.replace(/^0/, '+98'); // 09xxxxxxxxx -> +989xxxxxxxxx, as ASA's API expects
+  const client = await getAsaSoapClient();
+  const [result] = await client.SendSMSByPatternAsync({
+    fromNum,
+    toNum: [toNum],
+    Content: JSON.stringify({ code }, null, 0),
+    patternID: String(patternId),
+    Type: '0',
+    token,
   });
-  const data = await res.json();
-  if (!res.ok || data?.return?.status !== 200) {
-    throw new Error(data?.return?.message || 'ارسال پیامک OTP ناموفق بود');
+  console.log('ASA SendSMSByPattern raw result:', JSON.stringify(result));
+  if (!result || !result.return) {
+    throw new Error('ارسال پیامک OTP ناموفق بود (پاسخ خالی از ASA)');
   }
 }
 
@@ -261,7 +274,44 @@ const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
 // Toggle by setting OTP_ENABLED=true in .env once that's ready -- nothing else to change.
 const OTP_ENABLED = process.env.OTP_ENABLED === 'true';
 
-app.get('/auth/config', (req, res) => res.json({ otp_enabled: OTP_ENABLED }));
+app.get('/auth/config', (req, res) => res.json({
+  otp_enabled: OTP_ENABLED,
+  google_client_id: process.env.GOOGLE_CLIENT_ID || null,
+}));
+
+const googleClient = process.env.GOOGLE_CLIENT_ID ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID) : null;
+
+// "Sign in with Google": the frontend gets an ID token from Google Identity
+// Services and just hands it here -- verified server-side against Google's own
+// keys (never trust a token's claims without this), then matched or turned into
+// a new account by Google's stable per-account "sub" id.
+app.post('/auth/google', async (req, res) => {
+  if (!googleClient) return res.status(400).json({ error: 'GOOGLE_CLIENT_ID تنظیم نشده' });
+  const { credential } = req.body || {};
+  if (!credential) return res.status(400).json({ error: 'credential is required' });
+  try {
+    const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: process.env.GOOGLE_CLIENT_ID });
+    const payload = ticket.getPayload();
+    const googleId = payload.sub;
+    const email = payload.email;
+
+    let result = await pool.query('SELECT id FROM users WHERE google_id = $1', [googleId]);
+    if (result.rows.length === 0) {
+      const api_key = crypto.randomBytes(24).toString('hex');
+      result = await pool.query(
+        'INSERT INTO users (google_id, email, api_key) VALUES ($1, $2, $3) RETURNING id',
+        [googleId, email, api_key]
+      );
+      await backfillDefaultUser();
+    }
+    const user = result.rows[0];
+    res.cookie('session', signToken(user.id), COOKIE_OPTS);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('google auth error', err);
+    res.status(401).json({ error: 'اعتبارسنجی گوگل ناموفق بود' });
+  }
+});
 
 app.post('/auth/request-otp', async (req, res) => {
   if (!OTP_ENABLED) return res.json({ ok: true, skipped: true });
@@ -340,7 +390,7 @@ app.post('/auth/logout', (req, res) => {
 });
 
 app.get('/auth/me', requireAuth, async (req, res) => {
-  const result = await pool.query('SELECT id, phone, api_key, ntfy_topic FROM users WHERE id = $1', [req.userId]);
+  const result = await pool.query('SELECT id, phone, email, api_key, ntfy_topic FROM users WHERE id = $1', [req.userId]);
   if (result.rows.length === 0) return res.status(401).json({ error: 'unauthorized' });
   res.json(result.rows[0]);
 });

@@ -215,45 +215,83 @@ function showAuthScreen(mode) {
   renderAuthForm(mode || 'login');
 }
 
+// Renders the "یا با گوگل وارد شو" divider + button into #google-btn-slot, if the
+// server has a GOOGLE_CLIENT_ID configured. Google's script posts an ID token to
+// our callback, which we forward to the backend for verification -- the frontend
+// never checks the token itself.
+function renderGoogleButton(config) {
+  const slot = document.getElementById('google-btn-slot');
+  if (!slot || !config.google_client_id || !window.google?.accounts?.id) return;
+  slot.innerHTML = `
+    <div class="row" style="margin-top:14px;gap:10px">
+      <div style="flex:1;height:1px;background:var(--border-soft)"></div>
+      <span class="muted" style="font-size:.7rem">یا</span>
+      <div style="flex:1;height:1px;background:var(--border-soft)"></div>
+    </div>
+    <div id="google-btn-target" style="margin-top:10px;display:flex;justify-content:center"></div>
+  `;
+  window.google.accounts.id.initialize({
+    client_id: config.google_client_id,
+    callback: async (response) => {
+      const errorEl = document.getElementById('auth-error');
+      try {
+        const res = await fetch(`${API}/auth/google`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ credential: response.credential }),
+        });
+        const data = await res.json();
+        if (!res.ok) { if (errorEl) errorEl.textContent = data.error || 'ورود با گوگل ناموفق بود'; return; }
+        await bootstrapApp();
+      } catch (e) {
+        if (errorEl) errorEl.textContent = 'اتصال برقرار نشد';
+      }
+    },
+  });
+  window.google.accounts.id.renderButton(document.getElementById('google-btn-target'), { theme: 'filled_black', size: 'large', width: 280 });
+}
+
 function renderAuthForm(mode) {
   const isLogin = mode === 'login';
 
-  if (isLogin) {
-    authForm.innerHTML = `
-      <input id="auth-phone" placeholder="شماره موبایل (09xxxxxxxxx)" inputmode="tel" autocomplete="tel" />
-      <input id="auth-password" type="password" placeholder="رمز عبور" autocomplete="current-password" />
-      <div id="auth-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
-      <button class="action" id="auth-submit">ورود</button>
-      <button class="action secondary" id="auth-toggle">حساب نداری؟ ثبت‌نام کن</button>
-    `;
-    document.getElementById('auth-toggle').addEventListener('click', () => renderAuthForm('register'));
-    onClickLocked(document.getElementById('auth-submit'), async () => {
-      const phone = document.getElementById('auth-phone').value.trim();
-      const password = document.getElementById('auth-password').value;
-      const errorEl = document.getElementById('auth-error');
-      errorEl.textContent = '';
-      if (!phone || !password) { errorEl.textContent = 'شماره موبایل و رمز عبور رو وارد کن'; return; }
-      try {
-        const res = await fetch(`${API}/auth/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone, password }),
-        });
-        const data = await res.json();
-        if (!res.ok) { errorEl.textContent = data.error || 'خطایی پیش اومد'; return; }
-        await bootstrapApp();
-      } catch (e) {
-        errorEl.textContent = 'اتصال برقرار نشد';
-      }
-    });
-    return;
-  }
-
-  // Registration step 1: phone + password. Whether this leads to an OTP step (step 2)
-  // or registers right away depends on the server's /auth/config (OTP_ENABLED) --
-  // OTP is off until ASA SMS is fully wired up, without deleting any of that code.
   authForm.innerHTML = `<div class="muted" style="font-size:.8rem">در حال بارگذاری...</div>`;
-  fetch(`${API}/auth/config`).then((r) => r.json()).catch(() => ({ otp_enabled: false })).then((config) => {
+  fetch(`${API}/auth/config`).then((r) => r.json()).catch(() => ({ otp_enabled: false, google_client_id: null })).then((config) => {
+    if (isLogin) {
+      authForm.innerHTML = `
+        <input id="auth-phone" placeholder="شماره موبایل (09xxxxxxxxx)" inputmode="tel" autocomplete="tel" />
+        <input id="auth-password" type="password" placeholder="رمز عبور" autocomplete="current-password" />
+        <div id="auth-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
+        <button class="action" id="auth-submit">ورود</button>
+        <button class="action secondary" id="auth-toggle">حساب نداری؟ ثبت‌نام کن</button>
+        <div id="google-btn-slot"></div>
+      `;
+      document.getElementById('auth-toggle').addEventListener('click', () => renderAuthForm('register'));
+      onClickLocked(document.getElementById('auth-submit'), async () => {
+        const phone = document.getElementById('auth-phone').value.trim();
+        const password = document.getElementById('auth-password').value;
+        const errorEl = document.getElementById('auth-error');
+        errorEl.textContent = '';
+        if (!phone || !password) { errorEl.textContent = 'شماره موبایل و رمز عبور رو وارد کن'; return; }
+        try {
+          const res = await fetch(`${API}/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone, password }),
+          });
+          const data = await res.json();
+          if (!res.ok) { errorEl.textContent = data.error || 'خطایی پیش اومد'; return; }
+          await bootstrapApp();
+        } catch (e) {
+          errorEl.textContent = 'اتصال برقرار نشد';
+        }
+      });
+      renderGoogleButton(config);
+      return;
+    }
+
+    // Registration step 1: phone + password. Whether this leads to an OTP step (step 2)
+    // or registers right away depends on the server's /auth/config (OTP_ENABLED) --
+    // OTP is off until ASA SMS is fully wired up, without deleting any of that code.
     const otpEnabled = !!config.otp_enabled;
     authForm.innerHTML = `
       <input id="auth-phone" placeholder="شماره موبایل (09xxxxxxxxx)" inputmode="tel" autocomplete="tel" />
@@ -261,6 +299,7 @@ function renderAuthForm(mode) {
       <div id="auth-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
       <button class="action" id="auth-submit">${otpEnabled ? 'دریافت کد تأیید' : 'ثبت‌نام'}</button>
       <button class="action secondary" id="auth-toggle">قبلاً ثبت‌نام کردی؟ وارد شو</button>
+      <div id="google-btn-slot"></div>
     `;
     document.getElementById('auth-toggle').addEventListener('click', () => renderAuthForm('login'));
     onClickLocked(document.getElementById('auth-submit'), async () => {
@@ -293,6 +332,7 @@ function renderAuthForm(mode) {
         errorEl.textContent = 'اتصال برقرار نشد';
       }
     });
+    renderGoogleButton(config);
   });
 }
 

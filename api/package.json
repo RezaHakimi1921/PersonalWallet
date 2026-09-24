@@ -12,6 +12,8 @@
     "pg": "^8.12.0",
     "node-cron": "^3.0.3",
     "jalaali-js": "^1.2.6",
-    "bcryptjs": "^2.4.3"
+    "bcryptjs": "^2.4.3",
+    "soap": "^1.1.7",
+    "google-auth-library": "^9.14.1"
   }
 }
