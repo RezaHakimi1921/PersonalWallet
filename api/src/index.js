@@ -37,6 +37,20 @@ pool.query(`
   ALTER TABLE transactions ADD COLUMN IF NOT EXISTS balance_reverted BOOLEAN NOT NULL DEFAULT true
 `).catch((err) => console.error('balance_reverted migration error', err));
 
+// Self-migrating: audit trail for manual account-balance edits (via the accounts
+// ✎ form) -- a bad manual balance edit was silent and hard to trace back, so every
+// one is now logged with the before/after value.
+pool.query(`
+  CREATE TABLE IF NOT EXISTS balance_edit_log (
+    id SERIAL PRIMARY KEY,
+    account_id INT NOT NULL REFERENCES accounts(id),
+    user_id INT REFERENCES users(id),
+    old_balance_rial BIGINT,
+    new_balance_rial BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`).catch((err) => console.error('balance_edit_log migration error', err));
+
 // Self-migrating: multi-user auth. Each user gets their own fully separate wallet
 // (accounts/transactions/etc. are scoped by user_id). Existing single-user data,
 // created before this migration, has a NULL user_id; once exactly one user exists
@@ -512,7 +526,24 @@ app.post('/transactions/manual', requireAuth, async (req, res) => {
        VALUES ($1, $2, $3, $4, 'manual entry', 'confirmed', $5, $6, $7, $8) RETURNING *`,
       [account_id, amount_rial, direction, newBalance, category_id || null, note || null, tags || null, req.userId]
     );
-    res.json(txRes.rows[0]);
+    const tx = txRes.rows[0];
+
+    // Same duplicate check as the SMS webhook: catches the case where a manual
+    // entry is made for something that actually did land automatically too
+    // (e.g. right after the webhook URL was broken and then fixed).
+    const dupRes = await client.query(
+      `SELECT id FROM transactions
+       WHERE id != $1 AND deleted_at IS NULL AND account_id = $2 AND amount_rial = $3 AND direction = $4 AND user_id = $5
+         AND created_at > now() - interval '10 minutes'`,
+      [tx.id, account_id, amount_rial, direction, req.userId]
+    );
+    if (dupRes.rows.length > 0) {
+      const noteText = `احتمالاً تکراری با تراکنش #${dupRes.rows[0].id}${note ? ' — ' + note : ''}`;
+      await client.query('UPDATE transactions SET note = $1 WHERE id = $2', [noteText, tx.id]);
+      tx.note = noteText;
+    }
+
+    res.json(tx);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'internal error' });
@@ -704,6 +735,17 @@ app.post('/accounts', requireAuth, async (req, res) => {
 app.put('/accounts/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
   const { display_name, balance_rial, card_number, account_number, iban, cvv2, expiry, low_balance_threshold_rial } = req.body || {};
+
+  if (balance_rial != null) {
+    const existing = await pool.query('SELECT balance_rial FROM accounts WHERE id = $1 AND user_id = $2', [id, req.userId]);
+    if (existing.rows.length > 0 && Number(existing.rows[0].balance_rial) !== Number(balance_rial)) {
+      await pool.query(
+        'INSERT INTO balance_edit_log (account_id, user_id, old_balance_rial, new_balance_rial) VALUES ($1, $2, $3, $4)',
+        [id, req.userId, existing.rows[0].balance_rial, balance_rial]
+      );
+    }
+  }
+
   const result = await pool.query(
     `UPDATE accounts SET
        display_name = COALESCE($1, display_name),
@@ -720,6 +762,15 @@ app.put('/accounts/:id', requireAuth, async (req, res) => {
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
   if (balance_rial != null || low_balance_threshold_rial != null) await checkLowBalance(id);
   res.json(result.rows[0]);
+});
+
+app.get('/accounts/:id/balance-log', requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const result = await pool.query(
+    `SELECT * FROM balance_edit_log WHERE account_id = $1 AND user_id = $2 ORDER BY created_at DESC LIMIT 50`,
+    [id, req.userId]
+  );
+  res.json(result.rows);
 });
 
 // ---------- Categories ----------

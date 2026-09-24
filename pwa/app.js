@@ -1216,7 +1216,10 @@ async function renderAccounts() {
     <div class="bank-card" style="margin:10px 0;background:${bankTheme(a.bank_code)}">
       <div class="row">
         <div class="row" style="width:auto;gap:8px">${bankLogoHtml(a.bank_code, 28)}<span>${a.display_name}</span></div>
-        <button data-edit-acc="${a.id}" style="background:rgba(255,255,255,.15);border:none;color:white;border-radius:8px;padding:4px 8px;font-family:inherit;font-size:.7rem;cursor:pointer">✎ ویرایش</button>
+        <div class="row" style="width:auto;gap:6px">
+          <button data-balance-log="${a.id}" style="background:rgba(255,255,255,.15);border:none;color:white;border-radius:8px;padding:4px 8px;font-family:inherit;font-size:.7rem;cursor:pointer">🕓 تاریخچه</button>
+          <button data-edit-acc="${a.id}" style="background:rgba(255,255,255,.15);border:none;color:white;border-radius:8px;padding:4px 8px;font-family:inherit;font-size:.7rem;cursor:pointer">✎ ویرایش</button>
+        </div>
       </div>
       ${cardInfoHtml(a)}
       <div class="row" style="margin-top:12px">
@@ -1239,6 +1242,12 @@ async function renderAccounts() {
     b.addEventListener('click', (e) => {
       e.stopPropagation();
       openAccountModal(accounts.find((a) => a.id === Number(b.dataset.editAcc)));
+    });
+  });
+  document.querySelectorAll('[data-balance-log]').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openBalanceLogModal(accounts.find((a) => a.id === Number(b.dataset.balanceLog)));
     });
   });
   document.querySelectorAll('[data-recon]').forEach((b) => {
@@ -1304,6 +1313,24 @@ function openAccountModal(account) {
     manualModal.hidden = true;
     renderAccounts();
   });
+}
+
+async function openBalanceLogModal(account) {
+  const log = await api(`/accounts/${account.id}/balance-log`);
+  manualModal.innerHTML = `
+    <div class="card">
+      <strong>تاریخچه‌ی ویرایش دستی موجودی — ${account.display_name}</strong>
+      ${log.length === 0 ? '<p class="muted">تا حالا این حساب دستی ویرایش نشده.</p>' : log.map((l) => `
+        <div class="row muted font-num" style="margin-top:10px;font-size:.75rem;border-top:1px solid var(--border-soft);padding-top:8px">
+          <span>${formatJalaliDateTime(new Date(l.created_at))}</span>
+          <span>${toman(l.old_balance_rial)} ← ${toman(l.new_balance_rial)}</span>
+        </div>
+      `).join('')}
+      <button class="action secondary" id="bal-log-close" style="margin-top:14px">بستن</button>
+    </div>
+  `;
+  manualModal.hidden = false;
+  document.getElementById('bal-log-close').addEventListener('click', () => { manualModal.hidden = true; });
 }
 
 async function renderInstallments() {
