@@ -4,7 +4,6 @@ const cron = require('node-cron');
 const jalaali = require('jalaali-js');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const soap = require('soap');
 const { OAuth2Client } = require('google-auth-library');
 
 const { parseSms } = require('./parsers');
@@ -234,37 +233,33 @@ function normalizeIranianPhone(raw) {
   return /^09\d{9}$/.test(p) ? p : null;
 }
 
-// Sends a one-time code via ASA SMS's actual account-specific SOAP API (their
-// generic REST docs turned out not to match this account's real panel -- the panel's
-// own "راهنما" page gives this WSDL instead). Needs a pattern created in the ASA
-// panel (keyword "code"), its id, a sender line, and the account token.
-const ASA_WSDL_URL = 'http://185.112.33.61/wbs/send.php?wsdl';
-let asaSoapClientPromise = null;
-function getAsaSoapClient() {
-  if (!asaSoapClientPromise) asaSoapClientPromise = soap.createClientAsync(ASA_WSDL_URL);
-  return asaSoapClientPromise;
-}
-
+// Sends a one-time code via ASA SMS's REST v3 pattern-send API. (A SOAP endpoint
+// from the panel's own docs was tried first, but the account's real token only
+// verified successfully against this REST API -- confirmed live against
+// /my/credit before wiring up sending.) Needs a pattern created in the ASA panel
+// (keyword "code"), its id, a sender line, and the account token.
 async function sendOtpSms(phone, code) {
   const token = process.env.ASA_API_KEY;
-  const fromNum = process.env.ASA_SENDER;
+  const from = process.env.ASA_SENDER;
   const patternId = process.env.ASA_PATTERN_ID;
-  if (!token || !fromNum || !patternId) {
+  if (!token || !from || !patternId) {
     throw new Error('تنظیمات ASA SMS کامل نیست (ASA_API_KEY / ASA_SENDER / ASA_PATTERN_ID) — این‌ها باید توی .env سرور ست بشن');
   }
-  const toNum = phone.replace(/^0/, '+98'); // 09xxxxxxxxx -> +989xxxxxxxxx, as ASA's API expects
-  const client = await getAsaSoapClient();
-  const [result] = await client.SendSMSByPatternAsync({
-    fromNum,
-    toNum: [toNum],
-    Content: JSON.stringify({ code }, null, 0),
-    patternID: String(patternId),
-    Type: '0',
-    token,
+  const res = await fetch('https://api-payamak.com/api/v3/rest/sms/pattern-send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: token },
+    body: JSON.stringify({
+      from,
+      recipients: [phone],
+      message: { code },
+      pattern_id: Number(patternId),
+      type: 0,
+    }),
   });
-  console.log('ASA SendSMSByPattern raw result:', JSON.stringify(result));
-  if (!result || !result.return) {
-    throw new Error('ارسال پیامک OTP ناموفق بود (پاسخ خالی از ASA)');
+  const data = await res.json();
+  console.log('ASA pattern-send raw result:', JSON.stringify(data));
+  if (!res.ok || data?.return?.status !== 200) {
+    throw new Error(data?.return?.message || 'ارسال پیامک OTP ناموفق بود');
   }
 }
 
