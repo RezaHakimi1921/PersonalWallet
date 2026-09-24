@@ -54,6 +54,23 @@
     --gold: #f59e0b;
     --gold-dark: #b45309;
   }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #f8fafc;
+    --surface: rgba(255, 255, 255, 0.95);
+    --surface-2: #f1f5f9;
+    --border: rgba(203, 213, 225, 0.9);
+    --border-soft: rgba(203, 213, 225, 0.6);
+    --text: #0f172a;
+    --muted: #64748b;
+    --blue: #2563eb;
+    --blue-dim: rgba(37, 99, 235, 0.12);
+    --green: #059669;
+    --red: #dc2626;
+    --amber: #d97706;
+    --gold: #b45309;
+    --gold-dark: #92400e;
+  }
   * { box-sizing: border-box; }
   body {
     margin: 0;
@@ -236,6 +253,7 @@
     <div class="row" style="width:auto;gap:6px">
       <button id="btn-sms-sim" style="background:var(--surface-2);color:var(--muted);border:1px solid var(--border-soft);border-radius:10px;padding:8px 12px;font-size:.75rem;font-weight:700;font-family:inherit;cursor:pointer;white-space:nowrap;flex:0 0 auto">💬 تست پیامک</button>
       <button id="btn-privacy" style="width:36px;height:36px;padding:0;border-radius:50%;background:var(--surface-2);border:1px solid var(--border-soft);color:var(--muted);font-size:1.1rem;line-height:1;flex:0 0 auto">🐵</button>
+      <button id="btn-theme" style="width:36px;height:36px;padding:0;border-radius:50%;background:var(--surface-2);border:1px solid var(--border-soft);color:var(--muted);font-size:1.1rem;line-height:1;flex:0 0 auto">🌙</button>
     </div>
     <div class="row" style="width:auto;gap:10px;margin-right:auto">
       <div style="text-align:left;min-width:0">

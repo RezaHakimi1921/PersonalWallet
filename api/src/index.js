@@ -51,6 +51,20 @@ pool.query(`
   )
 `).catch((err) => console.error('balance_edit_log migration error', err));
 
+// Self-migrating: daily net-worth snapshots, taken by the 08:00 cron, so the
+// analytics tab can chart growth over time instead of only showing a live number.
+pool.query(`
+  CREATE TABLE IF NOT EXISTS net_worth_snapshots (
+    id SERIAL PRIMARY KEY,
+    user_id INT REFERENCES users(id),
+    net_worth_rial BIGINT NOT NULL,
+    cash_rial BIGINT NOT NULL,
+    investments_rial BIGINT NOT NULL,
+    debts_rial BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`).catch((err) => console.error('net_worth_snapshots migration error', err));
+
 // Self-migrating: multi-user auth. Each user gets their own fully separate wallet
 // (accounts/transactions/etc. are scoped by user_id). Existing single-user data,
 // created before this migration, has a NULL user_id; once exactly one user exists
@@ -1096,6 +1110,51 @@ app.post('/reminders/:id/restore', requireAuth, async (req, res) => {
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 const TRANSFER_CATEGORY_NAME = 'انتقال وجه بین حساب';
+const INSTALLMENT_REMINDER_LEAD_DAYS = 3;
+
+app.get('/net-worth/history', requireAuth, async (req, res) => {
+  const result = await pool.query(
+    `SELECT net_worth_rial, cash_rial, investments_rial, debts_rial, created_at
+     FROM net_worth_snapshots WHERE user_id = $1 ORDER BY created_at ASC LIMIT 400`,
+    [req.userId]
+  );
+  res.json(result.rows);
+});
+
+// A tiny, read-only summary endpoint for an iOS Shortcuts home-screen widget --
+// identified by api_key like the SMS webhook, since a widget can't hold a login
+// session. Keep this response minimal; it's meant to be glanced at, not browsed.
+app.get('/widget/summary/:apiKey', async (req, res) => {
+  const user = await resolveUserByApiKey(req.params.apiKey);
+  if (!user) return res.status(401).json({ error: 'invalid api key' });
+  const [accRes, invRes, instRes, debtRes] = await Promise.all([
+    pool.query('SELECT COALESCE(SUM(balance_rial),0) AS s FROM accounts WHERE user_id = $1', [user.id]),
+    pool.query('SELECT COALESCE(SUM(current_value_rial),0) AS s FROM investments WHERE user_id = $1', [user.id]),
+    pool.query(
+      `SELECT COALESCE(SUM(installment_amount_rial * (total_count - paid_count)),0) AS s
+       FROM installments WHERE status = 'active' AND user_id = $1`,
+      [user.id]
+    ),
+    pool.query(
+      `SELECT
+         COALESCE(SUM(amount_rial) FILTER (WHERE type = 'i_owe'), 0) AS i_owe,
+         COALESCE(SUM(amount_rial) FILTER (WHERE type = 'owed_to_me'), 0) AS owed_to_me
+       FROM debts WHERE status = 'open' AND deleted_at IS NULL AND user_id = $1`,
+      [user.id]
+    ),
+  ]);
+  const cash = Number(accRes.rows[0].s);
+  const investments = Number(invRes.rows[0].s);
+  const remainingInstallments = Number(instRes.rows[0].s);
+  const iOwe = Number(debtRes.rows[0].i_owe);
+  const owedToMe = Number(debtRes.rows[0].owed_to_me);
+  res.json({
+    cash_rial: cash,
+    net_worth_rial: cash + investments + owedToMe - remainingInstallments - iOwe,
+    cash_toman: Math.round(cash / 10),
+    net_worth_toman: Math.round((cash + investments + owedToMe - remainingInstallments - iOwe) / 10),
+  });
+});
 
 async function sendPeriodReport(title, sinceDate, untilDate, userId, topic) {
   const txRes = await pool.query(
@@ -1147,6 +1206,52 @@ cron.schedule('0 8 * * *', async () => {
           topic,
         });
       }
+
+      // Early heads-up 3 days before the due day too, not just on the day itself.
+      const daysInMonth = jalaali.jalaaliMonthLength(jy, jm);
+      let dueSoonDay = jd + INSTALLMENT_REMINDER_LEAD_DAYS;
+      if (dueSoonDay > daysInMonth) dueSoonDay -= daysInMonth;
+      const dueSoonRes = await pool.query(
+        `SELECT * FROM installments WHERE status = 'active' AND due_day_of_month = $1 AND user_id = $2`,
+        [dueSoonDay, user.id]
+      );
+      for (const inst of dueSoonRes.rows) {
+        await sendNtfy({
+          title: '📅 یادآور زودهنگام قسط',
+          message: `${INSTALLMENT_REMINDER_LEAD_DAYS} روز دیگه موعد قسط «${inst.title}» است: ${fmt(toToman(inst.installment_amount_rial))} ریال (قسط ${inst.paid_count + 1} از ${inst.total_count})`,
+          priority: 3,
+          tags: ['calendar'],
+          topic,
+        });
+      }
+
+      // Daily net-worth snapshot, for the growth-over-time chart.
+      const [accRes, invRes, instRes, debtRes] = await Promise.all([
+        pool.query('SELECT COALESCE(SUM(balance_rial),0) AS s FROM accounts WHERE user_id = $1', [user.id]),
+        pool.query(`SELECT COALESCE(SUM(current_value_rial),0) AS s FROM investments WHERE user_id = $1`, [user.id]),
+        pool.query(
+          `SELECT COALESCE(SUM(installment_amount_rial * (total_count - paid_count)),0) AS s
+           FROM installments WHERE status = 'active' AND user_id = $1`,
+          [user.id]
+        ),
+        pool.query(
+          `SELECT
+             COALESCE(SUM(amount_rial) FILTER (WHERE type = 'i_owe'), 0) AS i_owe,
+             COALESCE(SUM(amount_rial) FILTER (WHERE type = 'owed_to_me'), 0) AS owed_to_me
+           FROM debts WHERE status = 'open' AND deleted_at IS NULL AND user_id = $1`,
+          [user.id]
+        ),
+      ]);
+      const cash = Number(accRes.rows[0].s);
+      const investments = Number(invRes.rows[0].s);
+      const remainingInstallments = Number(instRes.rows[0].s);
+      const iOwe = Number(debtRes.rows[0].i_owe);
+      const owedToMe = Number(debtRes.rows[0].owed_to_me);
+      const netWorth = cash + investments + owedToMe - remainingInstallments - iOwe;
+      await pool.query(
+        `INSERT INTO net_worth_snapshots (user_id, net_worth_rial, cash_rial, investments_rial, debts_rial) VALUES ($1, $2, $3, $4, $5)`,
+        [user.id, netWorth, cash, investments, remainingInstallments + iOwe]
+      );
 
       if (jd === 1) {
         const prevJy = jm === 1 ? jy - 1 : jy;

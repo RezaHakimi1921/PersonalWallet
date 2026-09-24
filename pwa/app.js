@@ -433,6 +433,19 @@ btnPrivacy.addEventListener('click', () => {
   localStorage.setItem(PRIVACY_KEY, on ? '1' : '0');
   applyPrivacyMode(on);
 });
+
+const THEME_KEY = 'pw-theme';
+const btnTheme = document.getElementById('btn-theme');
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  btnTheme.textContent = theme === 'light' ? '☀️' : '🌙';
+  btnTheme.title = theme === 'light' ? 'حالت تاریک' : 'حالت روشن';
+}
+btnTheme.addEventListener('click', () => {
+  const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+});
 // Mask any newly-rendered .privacy-target elements immediately, before paint,
 // so switching tabs never flashes real numbers even for a frame.
 new MutationObserver(() => {
@@ -1702,8 +1715,34 @@ function shiftJalaliMonth(jy, jm, delta) {
 
 let analyticsMonth = null; // {jy, jm} — the month currently being browsed; null = current month
 
+function netWorthChartSvg(snapshots) {
+  if (snapshots.length < 2) return '<p class="muted">هنوز داده‌ی کافی نیست — هر روز ساعت ۸ صبح یه نقطه‌ی جدید ثبت می‌شه.</p>';
+  const values = snapshots.map((s) => Number(s.net_worth_rial));
+  const min = Math.min(...values), max = Math.max(...values);
+  const range = max - min || 1;
+  const w = 300, h = 90, pad = 6;
+  const points = values.map((v, i) => {
+    const x = pad + (i / (values.length - 1)) * (w - 2 * pad);
+    const y = h - pad - ((v - min) / range) * (h - 2 * pad);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const first = values[0], last = values[values.length - 1];
+  const changePercent = first !== 0 ? Math.round(((last - first) / Math.abs(first)) * 100) : null;
+  return `
+    <svg viewBox="0 0 ${w} ${h}" style="width:100%;height:90px;margin-top:8px" preserveAspectRatio="none">
+      <polyline points="${points}" fill="none" stroke="var(--gold)" stroke-width="2" />
+    </svg>
+    <div class="row muted font-num" style="font-size:.7rem;margin-top:4px">
+      <span>${formatJalaliDate(new Date(snapshots[0].created_at))}: ${toman(first)} ریال</span>
+      <span>${formatJalaliDate(new Date(snapshots[snapshots.length - 1].created_at))}: ${toman(last)} ریال${changePercent != null ? ` (${changePercent >= 0 ? '+' : ''}${changePercent}٪)` : ''}</span>
+    </div>
+  `;
+}
+
 async function renderAnalytics() {
-  const [txs, categories, accounts] = await Promise.all([api('/transactions'), api('/categories'), api('/accounts')]);
+  const [txs, categories, accounts, netWorthHistory] = await Promise.all([
+    api('/transactions'), api('/categories'), api('/accounts'), api('/net-worth/history'),
+  ]);
   const confirmed = txs.filter((t) => t.status === 'confirmed' && !isNonFlowCategory(t.category_name));
   const totalCash = accounts.reduce((s, a) => s + Number(a.balance_rial), 0);
 
@@ -1934,6 +1973,11 @@ async function renderAnalytics() {
         `).join('')}
       </div>
     ` : ''}
+
+    <div class="card">
+      <strong>روند رشد دارایی خالص</strong>
+      ${netWorthChartSvg(netWorthHistory)}
+    </div>
 
     <div class="card">
       <strong>مقایسه‌ی ۶ ماه اخیر (هزینه/درآمد)</strong>
@@ -2359,6 +2403,7 @@ document.getElementById('btn-sms-sim').addEventListener('click', openSmsModal);
 
 // restore privacy mode preference
 applyPrivacyMode(localStorage.getItem(PRIVACY_KEY) === '1');
+applyTheme(localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark');
 
 async function bootstrapApp() {
   const authed = await checkAuth();
