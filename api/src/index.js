@@ -936,6 +936,23 @@ app.post('/debts/:id/repay', requireAuth, async (req, res) => {
   res.json(result.rows[0]);
 });
 
+// Adds another loan amount onto an existing open debt/receivable, instead of
+// always creating a brand-new record for the same person (e.g. a second loan
+// to someone you already owe/are owed by should grow that one debt, not fork it).
+app.post('/debts/:id/add', requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const { amount_rial } = req.body || {};
+  if (!amount_rial) return res.status(400).json({ error: 'amount_rial is required' });
+  const debtRes = await pool.query('SELECT * FROM debts WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL', [id, req.userId]);
+  if (debtRes.rows.length === 0) return res.status(404).json({ error: 'not found' });
+  const debt = debtRes.rows[0];
+  const result = await pool.query(
+    `UPDATE debts SET amount_rial = $1, status = 'open' WHERE id = $2 RETURNING *`,
+    [Number(debt.amount_rial) + Number(amount_rial), id]
+  );
+  res.json(result.rows[0]);
+});
+
 app.post('/debts/:id/restore', requireAuth, async (req, res) => {
   const { id } = req.params;
   const result = await pool.query(

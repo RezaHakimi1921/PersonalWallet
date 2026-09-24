@@ -731,30 +731,58 @@ function wireTransferField(catSelectId, otherAccountSelectId, cats) {
 const LOAN_CATEGORY_NAME = 'قرض';
 
 function loanPersonFieldHtml(idSuffix) {
-  return `<input id="loan-person-${idSuffix}" placeholder="این قرض بود؟ نام طرف حساب رو بنویس" hidden />`;
+  return `<div id="loan-wrap-${idSuffix}" hidden>
+    <select id="loan-existing-${idSuffix}"></select>
+    <input id="loan-person-${idSuffix}" placeholder="اسم شخص (برای قرض به یه نفر جدید)" />
+  </div>`;
 }
 
-function wireLoanField(catSelectId, loanPersonInputId, cats) {
+function loanExistingOptionsHtml(debts, direction) {
+  const type = direction === 'expense' ? 'owed_to_me' : 'i_owe';
+  const matching = debts.filter((d) => d.status === 'open' && d.type === type);
+  return '<option value="">+ شخص جدید (اسمش رو زیر بنویس)</option>' + matching
+    .map((d) => `<option value="${d.id}">افزودن به ${d.person_name} (الان ${toman(d.amount_rial)} ریال)</option>`)
+    .join('');
+}
+
+// direction is a function so it can re-read a changeable direction <select> (edit/manual
+// forms) or just return a fixed value (pending confirm form, where direction can't change).
+function wireLoanField(catSelectId, idSuffix, cats, debts, direction) {
   const catSelect = document.getElementById(catSelectId);
-  const loanInput = document.getElementById(loanPersonInputId);
-  catSelect.addEventListener('change', () => {
+  const wrap = document.getElementById(`loan-wrap-${idSuffix}`);
+  const existingSelect = document.getElementById(`loan-existing-${idSuffix}`);
+  const personInput = document.getElementById(`loan-person-${idSuffix}`);
+  const update = () => {
     const selected = cats.find((c) => String(c.id) === catSelect.value);
-    loanInput.hidden = !(selected && selected.name === LOAN_CATEGORY_NAME);
-  });
+    const show = !!(selected && selected.name === LOAN_CATEGORY_NAME);
+    wrap.hidden = !show;
+    if (show) existingSelect.innerHTML = loanExistingOptionsHtml(debts || [], direction());
+  };
+  catSelect.addEventListener('change', update);
+  existingSelect.addEventListener('change', () => { personInput.hidden = !!existingSelect.value; });
+  update();
+  return update;
 }
 
-// After confirming a transaction tagged as a loan, also record it in the debts module.
-async function maybeCreateLoanDebt(loanInputId, direction, amount_rial) {
-  const loanInput = document.getElementById(loanInputId);
-  if (loanInput.hidden || !loanInput.value) return;
-  await api('/debts', {
-    method: 'POST',
-    body: JSON.stringify({
-      type: direction === 'expense' ? 'owed_to_me' : 'i_owe',
-      person_name: loanInput.value,
-      amount_rial,
-    }),
-  });
+// After confirming a transaction tagged as a loan, either add the amount onto an
+// existing open debt for that person (picked from loan-existing) or create a new one.
+async function maybeCreateLoanDebt(idSuffix, direction, amount_rial) {
+  const wrap = document.getElementById(`loan-wrap-${idSuffix}`);
+  if (wrap.hidden) return;
+  const existingId = document.getElementById(`loan-existing-${idSuffix}`).value;
+  const personName = document.getElementById(`loan-person-${idSuffix}`).value;
+  if (existingId) {
+    await api(`/debts/${existingId}/add`, { method: 'POST', body: JSON.stringify({ amount_rial }) });
+  } else if (personName) {
+    await api('/debts', {
+      method: 'POST',
+      body: JSON.stringify({
+        type: direction === 'expense' ? 'owed_to_me' : 'i_owe',
+        person_name: personName,
+        amount_rial,
+      }),
+    });
+  }
 }
 
 // A formal bank loan deposit: non-flow (not counted as income) and tracked as a
@@ -982,16 +1010,17 @@ async function openEditTxModal(t) {
   wireThousandsInput('e-amount');
 
   const updateRepayE = wireRepayField('e-category', () => document.getElementById('e-direction').value, 'repay-debt-e', cats, debts);
+  const updateLoanE = wireLoanField('e-category', 'e', cats, debts, () => document.getElementById('e-direction').value);
   document.getElementById('e-direction').addEventListener('change', (e) => {
     document.getElementById('e-category').innerHTML = renderCatOptions(e.target.value);
     updateRepayE();
+    updateLoanE();
   });
-  wireLoanField('e-category', 'loan-person-e', cats);
   wireBankLoanField('e-category', 'bank-loan-e', cats);
   document.getElementById('e-cancel').addEventListener('click', () => { manualModal.hidden = true; });
   onClickLocked(document.getElementById('e-save'), async () => {
     const accountName = accounts.find((a) => String(a.id) === document.getElementById('e-account').value)?.display_name || '';
-    await maybeCreateLoanDebt('loan-person-e', document.getElementById('e-direction').value, numFromInput('e-amount'));
+    await maybeCreateLoanDebt('e', document.getElementById('e-direction').value, numFromInput('e-amount'));
     await maybeRepayDebt('repay-debt-e', numFromInput('e-amount'));
     await maybeCreateLoanInstallment('e', accountName, numFromInput('e-amount'));
     await api(`/transactions/${t.id}/edit`, {
@@ -1047,7 +1076,7 @@ function wireTxCard(t, cats, accounts, debts, histogram) {
   if (!btn) return;
   wireThousandsInput(`amount-${t.id}`);
   wireTransferField(`cat-${t.id}`, `other-account-${t.id}`, cats);
-  wireLoanField(`cat-${t.id}`, `loan-person-${t.id}`, cats);
+  wireLoanField(`cat-${t.id}`, t.id, cats, debts, () => t.direction);
   wireRepayField(`cat-${t.id}`, () => t.direction, `repay-debt-${t.id}`, cats, debts || []);
   wireBankLoanField(`cat-${t.id}`, `bank-loan-${t.id}`, cats);
   if (histogram) wireCategorySuggestion(`amount-${t.id}`, `cat-${t.id}`, () => t.direction, histogram)();
@@ -1068,7 +1097,7 @@ function wireTxCard(t, cats, accounts, debts, histogram) {
       });
     }
     const account = accounts.find((a) => a.id === t.account_id);
-    await maybeCreateLoanDebt(`loan-person-${t.id}`, t.direction, amount_rial);
+    await maybeCreateLoanDebt(t.id, t.direction, amount_rial);
     await maybeRepayDebt(`repay-debt-${t.id}`, amount_rial);
     await maybeCreateLoanInstallment(t.id, account?.display_name || '', amount_rial);
     await api(`/transactions/${t.id}/confirm`, { method: 'POST', body: JSON.stringify({ category_id, note, tags }) });
@@ -2219,13 +2248,14 @@ async function openManualModal() {
 
   const updateRepayM = wireRepayField('m-category', () => document.getElementById('m-direction').value, 'repay-debt-m', cats, debts);
   const applySuggestionM = wireCategorySuggestion('m-amount', 'm-category', () => document.getElementById('m-direction').value, histogram);
+  const updateLoanM = wireLoanField('m-category', 'm', cats, debts, () => document.getElementById('m-direction').value);
   document.getElementById('m-direction').addEventListener('change', (e) => {
     document.getElementById('m-category').innerHTML = renderCatOptions(e.target.value);
     updateRepayM();
     applySuggestionM();
+    updateLoanM();
   });
   wireTransferField('m-category', 'other-account-m', cats);
-  wireLoanField('m-category', 'loan-person-m', cats);
   wireBankLoanField('m-category', 'bank-loan-m', cats);
   document.getElementById('m-cancel').addEventListener('click', () => { manualModal.hidden = true; });
   onClickLocked(document.getElementById('m-save'), async () => {
@@ -2242,7 +2272,7 @@ async function openManualModal() {
     if (!account_id || !amountToman) return;
     const tags = document.getElementById('m-tags').value || null;
     const accountName = accounts.find((a) => String(a.id) === account_id)?.display_name || '';
-    await maybeCreateLoanDebt('loan-person-m', direction, amountToman);
+    await maybeCreateLoanDebt('m', direction, amountToman);
     await maybeRepayDebt('repay-debt-m', amountToman);
     await maybeCreateLoanInstallment('m', accountName, amountToman);
     await api('/transactions/manual', {
