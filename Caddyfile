@@ -1,4 +1,4 @@
-78-39-51-105.nip.io {
+wallet.artepersia.com, 78-39-51-105.nip.io {
 	log {
 		output file /data/access.log {
 			roll_size 10mb
