@@ -60,6 +60,14 @@ async function migrateAuth() {
   // The old single-user schema had a global UNIQUE(name, direction) on categories;
   // that would now wrongly block two different users from both having e.g. "غذا".
   await pool.query(`ALTER TABLE categories DROP CONSTRAINT IF EXISTS categories_name_direction_key`);
+  await backfillDefaultUser();
+}
+
+// Assigns any pre-auth (NULL user_id) rows to the first registered user, but only
+// while there's exactly one user -- so it never fires again once a second person
+// signs up. Called at startup and right after a registration, so the very first
+// account picks up all the old single-user data immediately (not just on next boot).
+async function backfillDefaultUser() {
   await pool.query(`
     DO $$
     DECLARE default_user_id INT;
@@ -149,6 +157,7 @@ app.post('/auth/register', async (req, res) => {
       [username, password_hash, api_key]
     );
     const user = result.rows[0];
+    await backfillDefaultUser();
     res.cookie('session', signToken(user.id), COOKIE_OPTS);
     res.json({ ok: true, username: user.username });
   } catch (err) {
