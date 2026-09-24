@@ -189,8 +189,110 @@ async function api(path, opts) {
     headers: { 'Content-Type': 'application/json' },
     ...opts,
   });
+  if (res.status === 401) {
+    showAuthScreen('login');
+    throw new Error('unauthorized');
+  }
   if (!res.ok) throw new Error('request failed');
   return res.json();
+}
+
+// ---------- Auth ----------
+let currentUser = null;
+const authScreen = document.getElementById('auth-screen');
+const authForm = document.getElementById('auth-form');
+const appRoot = document.getElementById('app-root');
+
+function showApp() {
+  authScreen.hidden = true;
+  appRoot.hidden = false;
+}
+
+function showAuthScreen(mode) {
+  currentUser = null;
+  appRoot.hidden = true;
+  authScreen.hidden = false;
+  renderAuthForm(mode || 'login');
+}
+
+function renderAuthForm(mode) {
+  const isLogin = mode === 'login';
+  authForm.innerHTML = `
+    <input id="auth-username" placeholder="نام کاربری" autocomplete="username" />
+    <input id="auth-password" type="password" placeholder="رمز عبور" autocomplete="${isLogin ? 'current-password' : 'new-password'}" />
+    <div id="auth-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
+    <button class="action" id="auth-submit">${isLogin ? 'ورود' : 'ثبت‌نام'}</button>
+    <button class="action secondary" id="auth-toggle">${isLogin ? 'حساب نداری؟ ثبت‌نام کن' : 'قبلاً ثبت‌نام کردی؟ وارد شو'}</button>
+  `;
+  document.getElementById('auth-toggle').addEventListener('click', () => renderAuthForm(isLogin ? 'register' : 'login'));
+  onClickLocked(document.getElementById('auth-submit'), async () => {
+    const username = document.getElementById('auth-username').value.trim();
+    const password = document.getElementById('auth-password').value;
+    const errorEl = document.getElementById('auth-error');
+    errorEl.textContent = '';
+    if (!username || !password) { errorEl.textContent = 'نام کاربری و رمز عبور رو وارد کن'; return; }
+    try {
+      const res = await fetch(`${API}/auth/${isLogin ? 'login' : 'register'}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) { errorEl.textContent = data.error || 'خطایی پیش اومد'; return; }
+      await bootstrapApp();
+    } catch (e) {
+      errorEl.textContent = 'اتصال برقرار نشد';
+    }
+  });
+}
+
+async function checkAuth() {
+  try {
+    const res = await fetch(`${API}/auth/me`);
+    if (!res.ok) return false;
+    currentUser = await res.json();
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function openAccountSettingsModal() {
+  const webhookUrl = `${location.origin}/api/webhook/sms/${currentUser.api_key}`;
+  manualModal.innerHTML = `
+    <div class="card">
+      <strong>حساب کاربری</strong>
+      <div class="muted" style="margin-top:8px;font-size:.8rem">نام کاربری</div>
+      <div class="font-num">${currentUser.username}</div>
+
+      <div class="muted" style="margin-top:12px;font-size:.8rem">آدرس وب‌هوک پیامک بانکی (برای iOS Shortcuts)</div>
+      <textarea readonly class="sms-text" style="min-height:50px;font-size:.7rem" id="acc-webhook-url">${webhookUrl}</textarea>
+      <button class="action secondary" id="acc-copy-webhook">کپی آدرس</button>
+
+      <div class="muted" style="margin-top:12px;font-size:.8rem">تاپیک ntfy برای نوتیفیکیشن‌های خودت (اختیاری — خالی بذار یعنی همون پیش‌فرض سرور)</div>
+      <input id="acc-ntfy-topic" placeholder="مثلاً pw-username-123" value="${currentUser.ntfy_topic || ''}" />
+      <button class="action secondary" id="acc-save-ntfy">ذخیره</button>
+
+      <button class="action danger" id="acc-logout" style="margin-top:16px">خروج از حساب</button>
+      <button class="action secondary" id="acc-cancel">بستن</button>
+    </div>
+  `;
+  manualModal.hidden = false;
+  document.getElementById('acc-cancel').addEventListener('click', () => { manualModal.hidden = true; });
+  document.getElementById('acc-copy-webhook').addEventListener('click', () => {
+    navigator.clipboard?.writeText(webhookUrl);
+  });
+  onClickLocked(document.getElementById('acc-save-ntfy'), async () => {
+    const ntfy_topic = document.getElementById('acc-ntfy-topic').value.trim();
+    await api('/auth/me/ntfy-topic', { method: 'PUT', body: JSON.stringify({ ntfy_topic }) });
+    currentUser.ntfy_topic = ntfy_topic;
+    manualModal.hidden = true;
+  });
+  onClickLocked(document.getElementById('acc-logout'), async () => {
+    await fetch(`${API}/auth/logout`, { method: 'POST' });
+    manualModal.hidden = true;
+    showAuthScreen('login');
+  });
 }
 
 function setActiveTab(tab) {
@@ -206,6 +308,10 @@ tabButtons.forEach((btn) => {
 document.getElementById('btn-more').addEventListener('click', () => { moreSheet.hidden = false; });
 document.getElementById('btn-more-close').addEventListener('click', () => { moreSheet.hidden = true; });
 moreSheet.addEventListener('click', (e) => { if (e.target === moreSheet) moreSheet.hidden = true; });
+document.getElementById('btn-account-settings').addEventListener('click', () => {
+  moreSheet.hidden = true;
+  openAccountSettingsModal();
+});
 
 const PRIVACY_KEY = 'pw-privacy-mode';
 const btnPrivacy = document.getElementById('btn-privacy');
@@ -2103,7 +2209,7 @@ function openSmsModal() {
   bankSelect.addEventListener('change', fillSample);
   document.getElementById('s-cancel').addEventListener('click', () => { smsModal.hidden = true; });
   onClickLocked(document.getElementById('s-send'), async () => {
-    await api('/webhook/sms', {
+    await api(`/webhook/sms/${currentUser.api_key}`, {
       method: 'POST',
       body: JSON.stringify({ bank: bankSelect.value, text: textArea.value }),
     });
@@ -2117,9 +2223,16 @@ document.getElementById('btn-sms-sim').addEventListener('click', openSmsModal);
 // restore privacy mode preference
 applyPrivacyMode(localStorage.getItem(PRIVACY_KEY) === '1');
 
-// deep link support: #/tx/123 -> open pending tab
-if (location.hash.startsWith('#/tx/')) {
-  setActiveTab('pending');
-} else {
-  setActiveTab('overview');
+async function bootstrapApp() {
+  const authed = await checkAuth();
+  if (!authed) { showAuthScreen('login'); return; }
+  showApp();
+  // deep link support: #/tx/123 -> open pending tab
+  if (location.hash.startsWith('#/tx/')) {
+    setActiveTab('pending');
+  } else {
+    setActiveTab('overview');
+  }
 }
+
+bootstrapApp();

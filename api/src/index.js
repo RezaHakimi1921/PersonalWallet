@@ -2,11 +2,14 @@ const express = require('express');
 const { Pool } = require('pg');
 const cron = require('node-cron');
 const jalaali = require('jalaali-js');
+const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 
 const { parseSms } = require('./parsers');
 const { sendNtfy } = require('./ntfy');
 
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || '';
+const AUTH_SECRET = process.env.AUTH_SECRET || 'dev-secret-change-me';
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const app = express();
@@ -34,6 +37,48 @@ pool.query(`
   ALTER TABLE transactions ADD COLUMN IF NOT EXISTS balance_reverted BOOLEAN NOT NULL DEFAULT true
 `).catch((err) => console.error('balance_reverted migration error', err));
 
+// Self-migrating: multi-user auth. Each user gets their own fully separate wallet
+// (accounts/transactions/etc. are scoped by user_id). Existing single-user data,
+// created before this migration, has a NULL user_id; once exactly one user exists
+// (the first registration), it's automatically backfilled to that user so nothing
+// already in the app gets orphaned.
+async function migrateAuth() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      api_key TEXT UNIQUE NOT NULL,
+      ntfy_topic TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  const tables = ['accounts', 'categories', 'transactions', 'installments', 'debts', 'investments', 'reminders'];
+  for (const t of tables) {
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS user_id INT REFERENCES users(id)`);
+  }
+  // The old single-user schema had a global UNIQUE(name, direction) on categories;
+  // that would now wrongly block two different users from both having e.g. "غذا".
+  await pool.query(`ALTER TABLE categories DROP CONSTRAINT IF EXISTS categories_name_direction_key`);
+  await pool.query(`
+    DO $$
+    DECLARE default_user_id INT;
+    BEGIN
+      IF (SELECT COUNT(*) FROM users) = 1 THEN
+        SELECT id INTO default_user_id FROM users LIMIT 1;
+        UPDATE accounts SET user_id = default_user_id WHERE user_id IS NULL;
+        UPDATE categories SET user_id = default_user_id WHERE user_id IS NULL;
+        UPDATE transactions SET user_id = default_user_id WHERE user_id IS NULL;
+        UPDATE installments SET user_id = default_user_id WHERE user_id IS NULL;
+        UPDATE debts SET user_id = default_user_id WHERE user_id IS NULL;
+        UPDATE investments SET user_id = default_user_id WHERE user_id IS NULL;
+        UPDATE reminders SET user_id = default_user_id WHERE user_id IS NULL;
+      END IF;
+    END $$;
+  `);
+}
+migrateAuth().catch((err) => console.error('auth migration error', err));
+
 function toToman(rial) {
   return Math.round(rial);
 }
@@ -42,11 +87,112 @@ function fmt(n) {
   return n.toLocaleString('en-US');
 }
 
+// ---------- Auth helpers ----------
+function signToken(userId) {
+  const payload = Buffer.from(JSON.stringify({ userId, iat: Date.now() })).toString('base64url');
+  const sig = crypto.createHmac('sha256', AUTH_SECRET).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
+}
+
+function verifyToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const [payload, sig] = token.split('.');
+  if (!payload || !sig) return null;
+  const expectedSig = crypto.createHmac('sha256', AUTH_SECRET).update(payload).digest('base64url');
+  const sigBuf = Buffer.from(sig);
+  const expBuf = Buffer.from(expectedSig);
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return null;
+  try {
+    return JSON.parse(Buffer.from(payload, 'base64url').toString()).userId;
+  } catch {
+    return null;
+  }
+}
+
+function parseCookies(req) {
+  const header = req.headers.cookie;
+  const cookies = {};
+  if (!header) return cookies;
+  header.split(';').forEach((pair) => {
+    const idx = pair.indexOf('=');
+    if (idx === -1) return;
+    cookies[pair.slice(0, idx).trim()] = decodeURIComponent(pair.slice(idx + 1).trim());
+  });
+  return cookies;
+}
+
+function requireAuth(req, res, next) {
+  const userId = verifyToken(parseCookies(req).session);
+  if (!userId) return res.status(401).json({ error: 'unauthorized' });
+  req.userId = userId;
+  next();
+}
+
+async function resolveUserByApiKey(apiKey) {
+  if (!apiKey) return null;
+  const result = await pool.query('SELECT * FROM users WHERE api_key = $1', [apiKey]);
+  return result.rows[0] || null;
+}
+
+const COOKIE_OPTS = { httpOnly: true, sameSite: 'lax', secure: true, maxAge: 90 * 24 * 60 * 60 * 1000 };
+
+app.post('/auth/register', async (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password || password.length < 6) {
+    return res.status(400).json({ error: 'username and a password (6+ chars) are required' });
+  }
+  try {
+    const password_hash = await bcrypt.hash(password, 10);
+    const api_key = crypto.randomBytes(24).toString('hex');
+    const result = await pool.query(
+      'INSERT INTO users (username, password_hash, api_key) VALUES ($1, $2, $3) RETURNING id, username',
+      [username, password_hash, api_key]
+    );
+    const user = result.rows[0];
+    res.cookie('session', signToken(user.id), COOKIE_OPTS);
+    res.json({ ok: true, username: user.username });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'این نام کاربری قبلاً گرفته شده' });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+app.post('/auth/login', async (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: 'username and password required' });
+  const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+  const user = result.rows[0];
+  if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+    return res.status(401).json({ error: 'نام کاربری یا رمز اشتباهه' });
+  }
+  res.cookie('session', signToken(user.id), COOKIE_OPTS);
+  res.json({ ok: true, username: user.username });
+});
+
+app.post('/auth/logout', (req, res) => {
+  res.clearCookie('session');
+  res.json({ ok: true });
+});
+
+app.get('/auth/me', requireAuth, async (req, res) => {
+  const result = await pool.query('SELECT id, username, api_key, ntfy_topic FROM users WHERE id = $1', [req.userId]);
+  if (result.rows.length === 0) return res.status(401).json({ error: 'unauthorized' });
+  res.json(result.rows[0]);
+});
+
+app.put('/auth/me/ntfy-topic', requireAuth, async (req, res) => {
+  const { ntfy_topic } = req.body || {};
+  await pool.query('UPDATE users SET ntfy_topic = $1 WHERE id = $2', [ntfy_topic || null, req.userId]);
+  res.json({ ok: true });
+});
+
 // Fires immediately whenever a balance changes, instead of waiting for the daily cron.
 async function checkLowBalance(accountId) {
   try {
     const res = await pool.query(
-      'SELECT * FROM accounts WHERE id = $1 AND low_balance_threshold_rial IS NOT NULL AND balance_rial < low_balance_threshold_rial',
+      `SELECT a.*, u.ntfy_topic FROM accounts a LEFT JOIN users u ON u.id = a.user_id
+       WHERE a.id = $1 AND a.low_balance_threshold_rial IS NOT NULL AND a.balance_rial < a.low_balance_threshold_rial`,
       [accountId]
     );
     for (const acc of res.rows) {
@@ -55,6 +201,7 @@ async function checkLowBalance(accountId) {
         message: `حساب ${acc.display_name} از حد هشدار موجودی که تعیین کردی پایین‌تر رفته.`,
         priority: 4,
         tags: ['warning'],
+        topic: acc.ntfy_topic,
       });
     }
   } catch (err) {
@@ -62,8 +209,12 @@ async function checkLowBalance(accountId) {
   }
 }
 
-// ---------- Webhook: incoming bank SMS ----------
-app.post('/webhook/sms', async (req, res) => {
+// ---------- Webhook: incoming bank SMS. Not cookie-authenticated (an external iOS
+// Shortcut posts here) -- identified instead by the per-user api_key in the URL. ----------
+app.post('/webhook/sms/:apiKey', async (req, res) => {
+  const user = await resolveUserByApiKey(req.params.apiKey);
+  if (!user) return res.status(401).json({ error: 'invalid api key' });
+
   // iOS Shortcuts auto-capitalizes single-word field names (e.g. "Text"), so match keys case-insensitively.
   const body = {};
   for (const [k, v] of Object.entries(req.body || {})) body[k.toLowerCase()] = v;
@@ -73,7 +224,7 @@ app.post('/webhook/sms', async (req, res) => {
 
   const client = await pool.connect();
   try {
-    const accountRes = await client.query('SELECT * FROM accounts WHERE bank_code = $1', [bank]);
+    const accountRes = await client.query('SELECT * FROM accounts WHERE bank_code = $1 AND user_id = $2', [bank, user.id]);
     if (accountRes.rows.length === 0) {
       return res.status(404).json({ error: `unknown bank code: ${bank}` });
     }
@@ -88,6 +239,7 @@ app.post('/webhook/sms', async (req, res) => {
         message: text,
         priority: 4,
         tags: ['warning'],
+        topic: user.ntfy_topic,
       });
       return res.json({ ok: true, parsed: false });
     }
@@ -104,9 +256,9 @@ app.post('/webhook/sms', async (req, res) => {
     checkLowBalance(account.id);
 
     const txRes = await client.query(
-      `INSERT INTO transactions (account_id, amount_rial, direction, balance_after_rial, raw_text, status)
-       VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING id`,
-      [account.id, amount_rial, direction, newBalance, text]
+      `INSERT INTO transactions (account_id, amount_rial, direction, balance_after_rial, raw_text, status, user_id)
+       VALUES ($1, $2, $3, $4, $5, 'pending', $6) RETURNING id`,
+      [account.id, amount_rial, direction, newBalance, text, user.id]
     );
     const txId = txRes.rows[0].id;
 
@@ -115,8 +267,8 @@ app.post('/webhook/sms', async (req, res) => {
     if (direction === 'expense') {
       const matchRes = await client.query(
         `SELECT id, title FROM installments
-         WHERE status = 'active' AND installment_amount_rial = $1 AND paid_count < total_count`,
-        [amount_rial]
+         WHERE status = 'active' AND installment_amount_rial = $1 AND paid_count < total_count AND user_id = $2`,
+        [amount_rial, user.id]
       );
       matches = matchRes.rows;
     }
@@ -148,7 +300,7 @@ app.post('/webhook/sms', async (req, res) => {
       actions.push({
         action: 'http',
         label: 'بله قسط بود',
-        url: `${PUBLIC_BASE_URL}/api/transactions/${txId}/confirm-installment?installment_id=${matches[0].id}`,
+        url: `${PUBLIC_BASE_URL}/api/transactions/${txId}/confirm-installment?installment_id=${matches[0].id}&api_key=${user.api_key}`,
         method: 'POST',
         clear: true,
       });
@@ -158,7 +310,7 @@ app.post('/webhook/sms', async (req, res) => {
         actions.push({
           action: 'http',
           label: m.title,
-          url: `${PUBLIC_BASE_URL}/api/transactions/${txId}/confirm-installment?installment_id=${m.id}`,
+          url: `${PUBLIC_BASE_URL}/api/transactions/${txId}/confirm-installment?installment_id=${m.id}&api_key=${user.api_key}`,
           method: 'POST',
           clear: true,
         });
@@ -166,7 +318,7 @@ app.post('/webhook/sms', async (req, res) => {
     }
     actions.push({ action: 'view', label: 'دسته‌بندی', url: `${PUBLIC_BASE_URL}/#/tx/${txId}` });
 
-    await sendNtfy({ title: 'تراکنش جدید', message, actions, priority: 4 });
+    await sendNtfy({ title: 'تراکنش جدید', message, actions, priority: 4, topic: user.ntfy_topic });
 
     res.json({ ok: true, parsed: true, transaction_id: txId, new_balance_rial: newBalance });
   } catch (err) {
@@ -178,10 +330,10 @@ app.post('/webhook/sms', async (req, res) => {
 });
 
 // ---------- Transactions ----------
-app.get('/transactions', async (req, res) => {
+app.get('/transactions', requireAuth, async (req, res) => {
   const { status } = req.query;
-  const params = [];
-  let where = 'WHERE t.deleted_at IS NULL';
+  const params = [req.userId];
+  let where = 'WHERE t.deleted_at IS NULL AND t.user_id = $1';
   if (status) {
     params.push(status);
     where += ` AND t.status = $${params.length}`;
@@ -199,28 +351,29 @@ app.get('/transactions', async (req, res) => {
   res.json(result.rows);
 });
 
-app.get('/transactions/trash', async (req, res) => {
+app.get('/transactions/trash', requireAuth, async (req, res) => {
   const result = await pool.query(
     `SELECT t.*, a.display_name AS account_name, c.name AS category_name
      FROM transactions t
      JOIN accounts a ON a.id = t.account_id
      LEFT JOIN categories c ON c.id = t.category_id
-     WHERE t.deleted_at IS NOT NULL
+     WHERE t.deleted_at IS NOT NULL AND t.user_id = $1
      ORDER BY t.deleted_at DESC
-     LIMIT 100`
+     LIMIT 100`,
+    [req.userId]
   );
   res.json(result.rows);
 });
 
 // Manual entry: for when the automatic SMS webhook doesn't fire.
-app.post('/transactions/manual', async (req, res) => {
+app.post('/transactions/manual', requireAuth, async (req, res) => {
   const { account_id, amount_rial, direction, category_id, note, tags } = req.body || {};
   if (!account_id || !amount_rial || !['expense', 'income'].includes(direction)) {
     return res.status(400).json({ error: 'account_id, amount_rial and direction are required' });
   }
   const client = await pool.connect();
   try {
-    const accountRes = await client.query('SELECT * FROM accounts WHERE id = $1', [account_id]);
+    const accountRes = await client.query('SELECT * FROM accounts WHERE id = $1 AND user_id = $2', [account_id, req.userId]);
     if (accountRes.rows.length === 0) return res.status(404).json({ error: 'account not found' });
     const account = accountRes.rows[0];
 
@@ -231,9 +384,9 @@ app.post('/transactions/manual', async (req, res) => {
     checkLowBalance(account_id);
 
     const txRes = await client.query(
-      `INSERT INTO transactions (account_id, amount_rial, direction, balance_after_rial, raw_text, status, category_id, note, tags)
-       VALUES ($1, $2, $3, $4, 'manual entry', 'confirmed', $5, $6, $7) RETURNING *`,
-      [account_id, amount_rial, direction, newBalance, category_id || null, note || null, tags || null]
+      `INSERT INTO transactions (account_id, amount_rial, direction, balance_after_rial, raw_text, status, category_id, note, tags, user_id)
+       VALUES ($1, $2, $3, $4, 'manual entry', 'confirmed', $5, $6, $7, $8) RETURNING *`,
+      [account_id, amount_rial, direction, newBalance, category_id || null, note || null, tags || null, req.userId]
     );
     res.json(txRes.rows[0]);
   } catch (err) {
@@ -249,12 +402,12 @@ app.post('/transactions/manual', async (req, res) => {
 // remove the ledger entry only and leave the account balance untouched (e.g. a
 // duplicate SMS where the balance already reflects the real one). Recoverable
 // via /restore, which mirrors whichever choice was made here.
-app.delete('/transactions/:id', async (req, res) => {
+app.delete('/transactions/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
   const revertBalance = req.body?.revert_balance !== false;
   const client = await pool.connect();
   try {
-    const txRes = await client.query('SELECT * FROM transactions WHERE id = $1 AND deleted_at IS NULL', [id]);
+    const txRes = await client.query('SELECT * FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL', [id, req.userId]);
     if (txRes.rows.length === 0) return res.status(404).json({ error: 'not found' });
     const tx = txRes.rows[0];
 
@@ -278,11 +431,11 @@ app.delete('/transactions/:id', async (req, res) => {
 
 // Restore a soft-deleted transaction. Mirrors what the delete did: only
 // re-applies the balance effect if the delete had reverted it.
-app.post('/transactions/:id/restore', async (req, res) => {
+app.post('/transactions/:id/restore', requireAuth, async (req, res) => {
   const { id } = req.params;
   const client = await pool.connect();
   try {
-    const txRes = await client.query('SELECT * FROM transactions WHERE id = $1 AND deleted_at IS NOT NULL', [id]);
+    const txRes = await client.query('SELECT * FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL', [id, req.userId]);
     if (txRes.rows.length === 0) return res.status(404).json({ error: 'not found' });
     const tx = txRes.rows[0];
 
@@ -306,18 +459,22 @@ app.post('/transactions/:id/restore', async (req, res) => {
 
 // Edit an already-recorded transaction's amount/direction/account/category,
 // reconciling the account balance(s) for the change.
-app.put('/transactions/:id/edit', async (req, res) => {
+app.put('/transactions/:id/edit', requireAuth, async (req, res) => {
   const { id } = req.params;
   const { amount_rial, direction, account_id, category_id, note, tags } = req.body || {};
   const client = await pool.connect();
   try {
-    const txRes = await client.query('SELECT * FROM transactions WHERE id = $1', [id]);
+    const txRes = await client.query('SELECT * FROM transactions WHERE id = $1 AND user_id = $2', [id, req.userId]);
     if (txRes.rows.length === 0) return res.status(404).json({ error: 'not found' });
     const tx = txRes.rows[0];
 
     const newAmount = amount_rial != null ? Number(amount_rial) : Number(tx.amount_rial);
     const newDirection = direction || tx.direction;
-    const newAccountId = account_id != null ? Number(account_id) : tx.account_id;
+    let newAccountId = account_id != null ? Number(account_id) : tx.account_id;
+    if (newAccountId !== tx.account_id) {
+      const ownCheck = await client.query('SELECT id FROM accounts WHERE id = $1 AND user_id = $2', [newAccountId, req.userId]);
+      if (ownCheck.rows.length === 0) return res.status(404).json({ error: 'account not found' });
+    }
 
     // revert the old effect on the old account
     const oldAccountRes = await client.query('SELECT * FROM accounts WHERE id = $1', [tx.account_id]);
@@ -351,36 +508,42 @@ app.put('/transactions/:id/edit', async (req, res) => {
   }
 });
 
-app.post('/transactions/:id/confirm', async (req, res) => {
+app.post('/transactions/:id/confirm', requireAuth, async (req, res) => {
   const { id } = req.params;
   const { category_id, note, tags } = req.body || {};
   const result = await pool.query(
-    `UPDATE transactions SET category_id = $1, note = $2, status = 'confirmed', tags = COALESCE($3, tags) WHERE id = $4 RETURNING *`,
-    [category_id || null, note || null, tags || null, id]
+    `UPDATE transactions SET category_id = $1, note = $2, status = 'confirmed', tags = COALESCE($3, tags) WHERE id = $4 AND user_id = $5 RETURNING *`,
+    [category_id || null, note || null, tags || null, id, req.userId]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
   res.json(result.rows[0]);
 });
 
+// Triggered from a "yes, this was an installment" ntfy action button, so it can't
+// carry a session cookie -- identified by the same api_key as the SMS webhook.
 app.post('/transactions/:id/confirm-installment', async (req, res) => {
+  const apiKey = req.query.api_key || req.body?.api_key;
+  const user = await resolveUserByApiKey(apiKey);
+  if (!user) return res.status(401).json({ error: 'invalid api key' });
+
   const { id } = req.params;
   const installmentId = req.query.installment_id || req.body?.installment_id;
   if (!installmentId) return res.status(400).json({ error: 'installment_id required' });
 
   const client = await pool.connect();
   try {
-    const catRes = await client.query(`SELECT id FROM categories WHERE name = 'قسط' AND direction = 'expense'`);
+    const catRes = await client.query(`SELECT id FROM categories WHERE name = 'قسط' AND direction = 'expense' AND user_id = $1`, [user.id]);
     const categoryId = catRes.rows[0]?.id || null;
 
     const txRes = await client.query(
-      `UPDATE transactions SET category_id = $1, status = 'confirmed', installment_id = $2 WHERE id = $3 RETURNING *`,
-      [categoryId, installmentId, id]
+      `UPDATE transactions SET category_id = $1, status = 'confirmed', installment_id = $2 WHERE id = $3 AND user_id = $4 RETURNING *`,
+      [categoryId, installmentId, id, user.id]
     );
     if (txRes.rows.length === 0) return res.status(404).json({ error: 'transaction not found' });
 
     const instRes = await client.query(
-      `UPDATE installments SET paid_count = paid_count + 1 WHERE id = $1 RETURNING *`,
-      [installmentId]
+      `UPDATE installments SET paid_count = paid_count + 1 WHERE id = $1 AND user_id = $2 RETURNING *`,
+      [installmentId, user.id]
     );
     const inst = instRes.rows[0];
     if (inst && inst.paid_count >= inst.total_count) {
@@ -397,24 +560,24 @@ app.post('/transactions/:id/confirm-installment', async (req, res) => {
 });
 
 // ---------- Accounts ----------
-app.get('/accounts', async (req, res) => {
-  const result = await pool.query('SELECT * FROM accounts ORDER BY id');
+app.get('/accounts', requireAuth, async (req, res) => {
+  const result = await pool.query('SELECT * FROM accounts WHERE user_id = $1 ORDER BY id', [req.userId]);
   res.json(result.rows);
 });
 
-app.post('/accounts', async (req, res) => {
+app.post('/accounts', requireAuth, async (req, res) => {
   const { display_name, balance_rial, card_number, account_number, iban, cvv2, expiry, low_balance_threshold_rial } = req.body || {};
   if (!display_name) return res.status(400).json({ error: 'display_name is required' });
   const bank_code = `manual-${Date.now()}`;
   const result = await pool.query(
-    `INSERT INTO accounts (bank_code, display_name, balance_rial, card_number, account_number, iban, cvv2, expiry, low_balance_threshold_rial)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-    [bank_code, display_name, balance_rial || 0, card_number || null, account_number || null, iban || null, cvv2 || null, expiry || null, low_balance_threshold_rial || null]
+    `INSERT INTO accounts (bank_code, display_name, balance_rial, card_number, account_number, iban, cvv2, expiry, low_balance_threshold_rial, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+    [bank_code, display_name, balance_rial || 0, card_number || null, account_number || null, iban || null, cvv2 || null, expiry || null, low_balance_threshold_rial || null, req.userId]
   );
   res.json(result.rows[0]);
 });
 
-app.put('/accounts/:id', async (req, res) => {
+app.put('/accounts/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
   const { display_name, balance_rial, card_number, account_number, iban, cvv2, expiry, low_balance_threshold_rial } = req.body || {};
   const result = await pool.query(
@@ -427,8 +590,8 @@ app.put('/accounts/:id', async (req, res) => {
        cvv2 = COALESCE($6, cvv2),
        expiry = COALESCE($7, expiry),
        low_balance_threshold_rial = COALESCE($8, low_balance_threshold_rial)
-     WHERE id = $9 RETURNING *`,
-    [display_name ?? null, balance_rial ?? null, card_number ?? null, account_number ?? null, iban ?? null, cvv2 ?? null, expiry ?? null, low_balance_threshold_rial ?? null, id]
+     WHERE id = $9 AND user_id = $10 RETURNING *`,
+    [display_name ?? null, balance_rial ?? null, card_number ?? null, account_number ?? null, iban ?? null, cvv2 ?? null, expiry ?? null, low_balance_threshold_rial ?? null, id, req.userId]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
   if (balance_rial != null || low_balance_threshold_rial != null) await checkLowBalance(id);
@@ -436,59 +599,59 @@ app.put('/accounts/:id', async (req, res) => {
 });
 
 // ---------- Categories ----------
-app.get('/categories', async (req, res) => {
-  const result = await pool.query('SELECT * FROM categories WHERE is_active = true ORDER BY direction, name');
+app.get('/categories', requireAuth, async (req, res) => {
+  const result = await pool.query('SELECT * FROM categories WHERE is_active = true AND user_id = $1 ORDER BY direction, name', [req.userId]);
   res.json(result.rows);
 });
 
-app.post('/categories', async (req, res) => {
+app.post('/categories', requireAuth, async (req, res) => {
   const { name, direction } = req.body || {};
   if (!name || !['expense', 'income'].includes(direction)) {
     return res.status(400).json({ error: 'name and valid direction are required' });
   }
   const result = await pool.query(
-    'INSERT INTO categories (name, direction) VALUES ($1, $2) RETURNING *',
-    [name, direction]
+    'INSERT INTO categories (name, direction, user_id) VALUES ($1, $2, $3) RETURNING *',
+    [name, direction, req.userId]
   );
   res.json(result.rows[0]);
 });
 
-app.put('/categories/:id', async (req, res) => {
+app.put('/categories/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
   const { name, is_active } = req.body || {};
   const result = await pool.query(
-    `UPDATE categories SET name = COALESCE($1, name), is_active = COALESCE($2, is_active) WHERE id = $3 RETURNING *`,
-    [name ?? null, is_active ?? null, id]
+    `UPDATE categories SET name = COALESCE($1, name), is_active = COALESCE($2, is_active) WHERE id = $3 AND user_id = $4 RETURNING *`,
+    [name ?? null, is_active ?? null, id, req.userId]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
   res.json(result.rows[0]);
 });
 
 // ---------- Installments / Loans ----------
-app.get('/installments', async (req, res) => {
-  const result = await pool.query('SELECT * FROM installments WHERE deleted_at IS NULL ORDER BY status, due_day_of_month');
+app.get('/installments', requireAuth, async (req, res) => {
+  const result = await pool.query('SELECT * FROM installments WHERE deleted_at IS NULL AND user_id = $1 ORDER BY status, due_day_of_month', [req.userId]);
   res.json(result.rows);
 });
 
-app.get('/installments/trash', async (req, res) => {
-  const result = await pool.query('SELECT * FROM installments WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC');
+app.get('/installments/trash', requireAuth, async (req, res) => {
+  const result = await pool.query('SELECT * FROM installments WHERE deleted_at IS NOT NULL AND user_id = $1 ORDER BY deleted_at DESC', [req.userId]);
   res.json(result.rows);
 });
 
-app.post('/installments', async (req, res) => {
+app.post('/installments', requireAuth, async (req, res) => {
   const { title, type, total_amount_rial, installment_amount_rial, total_count, due_day_of_month, note } = req.body || {};
   if (!title || !installment_amount_rial || !total_count || !due_day_of_month) {
     return res.status(400).json({ error: 'missing required fields' });
   }
   const result = await pool.query(
-    `INSERT INTO installments (title, type, total_amount_rial, installment_amount_rial, total_count, due_day_of_month, note)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-    [title, type || 'installment', total_amount_rial || null, installment_amount_rial, total_count, due_day_of_month, note || null]
+    `INSERT INTO installments (title, type, total_amount_rial, installment_amount_rial, total_count, due_day_of_month, note, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+    [title, type || 'installment', total_amount_rial || null, installment_amount_rial, total_count, due_day_of_month, note || null, req.userId]
   );
   res.json(result.rows[0]);
 });
 
-app.put('/installments/:id', async (req, res) => {
+app.put('/installments/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
   const { title, installment_amount_rial, total_count, paid_count, due_day_of_month, note } = req.body || {};
   const result = await pool.query(
@@ -500,36 +663,36 @@ app.put('/installments/:id', async (req, res) => {
        due_day_of_month = COALESCE($5, due_day_of_month),
        note = COALESCE($6, note),
        status = CASE WHEN COALESCE($4, paid_count) >= COALESCE($3, total_count) THEN 'completed' ELSE 'active' END
-     WHERE id = $7 RETURNING *`,
-    [title ?? null, installment_amount_rial ?? null, total_count ?? null, paid_count ?? null, due_day_of_month ?? null, note ?? null, id]
+     WHERE id = $7 AND user_id = $8 RETURNING *`,
+    [title ?? null, installment_amount_rial ?? null, total_count ?? null, paid_count ?? null, due_day_of_month ?? null, note ?? null, id, req.userId]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
   res.json(result.rows[0]);
 });
 
-app.delete('/installments/:id', async (req, res) => {
+app.delete('/installments/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
   const result = await pool.query(
-    'UPDATE installments SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL RETURNING id',
-    [id]
+    'UPDATE installments SET deleted_at = now() WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL RETURNING id',
+    [id, req.userId]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
   res.json({ ok: true });
 });
 
-app.post('/installments/:id/restore', async (req, res) => {
+app.post('/installments/:id/restore', requireAuth, async (req, res) => {
   const { id } = req.params;
   const result = await pool.query(
-    'UPDATE installments SET deleted_at = NULL WHERE id = $1 AND deleted_at IS NOT NULL RETURNING *',
-    [id]
+    'UPDATE installments SET deleted_at = NULL WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL RETURNING *',
+    [id, req.userId]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
   res.json(result.rows[0]);
 });
 
-app.post('/installments/:id/pay', async (req, res) => {
+app.post('/installments/:id/pay', requireAuth, async (req, res) => {
   const { id } = req.params;
-  const instRes = await pool.query('UPDATE installments SET paid_count = paid_count + 1 WHERE id = $1 RETURNING *', [id]);
+  const instRes = await pool.query('UPDATE installments SET paid_count = paid_count + 1 WHERE id = $1 AND user_id = $2 RETURNING *', [id, req.userId]);
   if (instRes.rows.length === 0) return res.status(404).json({ error: 'not found' });
   const inst = instRes.rows[0];
   if (inst.paid_count >= inst.total_count) {
@@ -539,12 +702,12 @@ app.post('/installments/:id/pay', async (req, res) => {
 });
 
 // ---------- Investments ----------
-app.get('/investments', async (req, res) => {
-  const result = await pool.query('SELECT * FROM investments ORDER BY created_at DESC');
+app.get('/investments', requireAuth, async (req, res) => {
+  const result = await pool.query('SELECT * FROM investments WHERE user_id = $1 ORDER BY created_at DESC', [req.userId]);
   res.json(result.rows);
 });
 
-app.post('/investments', async (req, res) => {
+app.post('/investments', requireAuth, async (req, res) => {
   const {
     title, asset_type, quantity, purchase_unit_price_rial,
     invested_amount_rial, current_value_rial, note,
@@ -558,24 +721,24 @@ app.post('/investments', async (req, res) => {
   if (!computedInvested) return res.status(400).json({ error: 'invested_amount_rial or quantity+purchase_unit_price_rial required' });
 
   const result = await pool.query(
-    `INSERT INTO investments (title, asset_type, quantity, purchase_unit_price_rial, current_unit_price_rial, invested_amount_rial, current_value_rial, note)
-     VALUES ($1, $2, $3, $4, $4, $5, $6, $7) RETURNING *`,
+    `INSERT INTO investments (title, asset_type, quantity, purchase_unit_price_rial, current_unit_price_rial, invested_amount_rial, current_value_rial, note, user_id)
+     VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8) RETURNING *`,
     [
       title, asset_type || 'other', quantity ?? null, purchase_unit_price_rial ?? null,
-      computedInvested, current_value_rial ?? computedInvested, note || null,
+      computedInvested, current_value_rial ?? computedInvested, note || null, req.userId,
     ]
   );
   res.json(result.rows[0]);
 });
 
-app.put('/investments/:id', async (req, res) => {
+app.put('/investments/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
   const { title, quantity, purchase_unit_price_rial, invested_amount_rial, current_value_rial, current_unit_price_rial, note } = req.body || {};
   const client = await pool.connect();
   try {
     let resolvedCurrentValue = current_value_rial;
     if (current_unit_price_rial != null && quantity == null) {
-      const invRes = await client.query('SELECT quantity FROM investments WHERE id = $1', [id]);
+      const invRes = await client.query('SELECT quantity FROM investments WHERE id = $1 AND user_id = $2', [id, req.userId]);
       const existingQuantity = invRes.rows[0]?.quantity;
       if (existingQuantity != null) resolvedCurrentValue = Math.round(Number(existingQuantity) * Number(current_unit_price_rial));
     }
@@ -589,8 +752,8 @@ app.put('/investments/:id', async (req, res) => {
          current_unit_price_rial = COALESCE($6, current_unit_price_rial),
          note = COALESCE($7, note),
          updated_at = now()
-       WHERE id = $8 RETURNING *`,
-      [title ?? null, quantity ?? null, purchase_unit_price_rial ?? null, invested_amount_rial ?? null, resolvedCurrentValue ?? null, current_unit_price_rial ?? null, note ?? null, id]
+       WHERE id = $8 AND user_id = $9 RETURNING *`,
+      [title ?? null, quantity ?? null, purchase_unit_price_rial ?? null, invested_amount_rial ?? null, resolvedCurrentValue ?? null, current_unit_price_rial ?? null, note ?? null, id, req.userId]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
     res.json(result.rows[0]);
@@ -600,29 +763,29 @@ app.put('/investments/:id', async (req, res) => {
 });
 
 // ---------- Debts & receivables ----------
-app.get('/debts', async (req, res) => {
-  const result = await pool.query('SELECT * FROM debts WHERE deleted_at IS NULL ORDER BY status, due_date NULLS LAST');
+app.get('/debts', requireAuth, async (req, res) => {
+  const result = await pool.query('SELECT * FROM debts WHERE deleted_at IS NULL AND user_id = $1 ORDER BY status, due_date NULLS LAST', [req.userId]);
   res.json(result.rows);
 });
 
-app.get('/debts/trash', async (req, res) => {
-  const result = await pool.query('SELECT * FROM debts WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC');
+app.get('/debts/trash', requireAuth, async (req, res) => {
+  const result = await pool.query('SELECT * FROM debts WHERE deleted_at IS NOT NULL AND user_id = $1 ORDER BY deleted_at DESC', [req.userId]);
   res.json(result.rows);
 });
 
-app.post('/debts', async (req, res) => {
+app.post('/debts', requireAuth, async (req, res) => {
   const { type, person_name, amount_rial, due_date, note } = req.body || {};
   if (!['i_owe', 'owed_to_me'].includes(type) || !person_name || !amount_rial) {
     return res.status(400).json({ error: 'type, person_name and amount_rial are required' });
   }
   const result = await pool.query(
-    `INSERT INTO debts (type, person_name, amount_rial, due_date, note) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-    [type, person_name, amount_rial, due_date || null, note || null]
+    `INSERT INTO debts (type, person_name, amount_rial, due_date, note, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    [type, person_name, amount_rial, due_date || null, note || null, req.userId]
   );
   res.json(result.rows[0]);
 });
 
-app.put('/debts/:id', async (req, res) => {
+app.put('/debts/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
   const { person_name, amount_rial, due_date, status, note } = req.body || {};
   const result = await pool.query(
@@ -632,18 +795,18 @@ app.put('/debts/:id', async (req, res) => {
        due_date = COALESCE($3, due_date),
        status = COALESCE($4, status),
        note = COALESCE($5, note)
-     WHERE id = $6 AND deleted_at IS NULL RETURNING *`,
-    [person_name ?? null, amount_rial ?? null, due_date ?? null, status ?? null, note ?? null, id]
+     WHERE id = $6 AND user_id = $7 AND deleted_at IS NULL RETURNING *`,
+    [person_name ?? null, amount_rial ?? null, due_date ?? null, status ?? null, note ?? null, id, req.userId]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
   res.json(result.rows[0]);
 });
 
-app.delete('/debts/:id', async (req, res) => {
+app.delete('/debts/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
   const result = await pool.query(
-    'UPDATE debts SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL RETURNING id',
-    [id]
+    'UPDATE debts SET deleted_at = now() WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL RETURNING id',
+    [id, req.userId]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
   res.json({ ok: true });
@@ -651,11 +814,11 @@ app.delete('/debts/:id', async (req, res) => {
 
 // Partial or full repayment against an existing debt/receivable: subtracts the
 // amount and auto-settles once it reaches zero, instead of always marking done.
-app.post('/debts/:id/repay', async (req, res) => {
+app.post('/debts/:id/repay', requireAuth, async (req, res) => {
   const { id } = req.params;
   const { amount_rial } = req.body || {};
   if (!amount_rial) return res.status(400).json({ error: 'amount_rial is required' });
-  const debtRes = await pool.query('SELECT * FROM debts WHERE id = $1 AND deleted_at IS NULL', [id]);
+  const debtRes = await pool.query('SELECT * FROM debts WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL', [id, req.userId]);
   if (debtRes.rows.length === 0) return res.status(404).json({ error: 'not found' });
   const debt = debtRes.rows[0];
   const remaining = Math.max(0, Number(debt.amount_rial) - Number(amount_rial));
@@ -666,11 +829,11 @@ app.post('/debts/:id/repay', async (req, res) => {
   res.json(result.rows[0]);
 });
 
-app.post('/debts/:id/restore', async (req, res) => {
+app.post('/debts/:id/restore', requireAuth, async (req, res) => {
   const { id } = req.params;
   const result = await pool.query(
-    'UPDATE debts SET deleted_at = NULL WHERE id = $1 AND deleted_at IS NOT NULL RETURNING *',
-    [id]
+    'UPDATE debts SET deleted_at = NULL WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL RETURNING *',
+    [id, req.userId]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
   res.json(result.rows[0]);
@@ -678,29 +841,30 @@ app.post('/debts/:id/restore', async (req, res) => {
 
 // ---------- Reminders module: a generic reminder system. Installments, debts, bills,
 // etc. are all just entries tagged with a "module" label so they show up in one place. ----------
-app.get('/reminders', async (req, res) => {
+app.get('/reminders', requireAuth, async (req, res) => {
   const result = await pool.query(
-    `SELECT * FROM reminders WHERE deleted_at IS NULL ORDER BY sent ASC, remind_at ASC`
+    `SELECT * FROM reminders WHERE deleted_at IS NULL AND user_id = $1 ORDER BY sent ASC, remind_at ASC`,
+    [req.userId]
   );
   res.json(result.rows);
 });
 
-app.get('/reminders/trash', async (req, res) => {
-  const result = await pool.query('SELECT * FROM reminders WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC');
+app.get('/reminders/trash', requireAuth, async (req, res) => {
+  const result = await pool.query('SELECT * FROM reminders WHERE deleted_at IS NOT NULL AND user_id = $1 ORDER BY deleted_at DESC', [req.userId]);
   res.json(result.rows);
 });
 
-app.post('/reminders', async (req, res) => {
+app.post('/reminders', requireAuth, async (req, res) => {
   const { module, title, note, remind_at } = req.body || {};
   if (!title || !remind_at) return res.status(400).json({ error: 'title and remind_at are required' });
   const result = await pool.query(
-    `INSERT INTO reminders (module, title, note, remind_at) VALUES ($1, $2, $3, $4) RETURNING *`,
-    [module || 'عمومی', title, note || null, remind_at]
+    `INSERT INTO reminders (module, title, note, remind_at, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+    [module || 'عمومی', title, note || null, remind_at, req.userId]
   );
   res.json(result.rows[0]);
 });
 
-app.put('/reminders/:id', async (req, res) => {
+app.put('/reminders/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
   const { module, title, note, remind_at } = req.body || {};
   const result = await pool.query(
@@ -710,28 +874,28 @@ app.put('/reminders/:id', async (req, res) => {
        note = COALESCE($3, note),
        remind_at = COALESCE($4, remind_at),
        sent = false
-     WHERE id = $5 AND deleted_at IS NULL RETURNING *`,
-    [module ?? null, title ?? null, note ?? null, remind_at ?? null, id]
+     WHERE id = $5 AND user_id = $6 AND deleted_at IS NULL RETURNING *`,
+    [module ?? null, title ?? null, note ?? null, remind_at ?? null, id, req.userId]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
   res.json(result.rows[0]);
 });
 
-app.delete('/reminders/:id', async (req, res) => {
+app.delete('/reminders/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
   const result = await pool.query(
-    'UPDATE reminders SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL RETURNING id',
-    [id]
+    'UPDATE reminders SET deleted_at = now() WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL RETURNING id',
+    [id, req.userId]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
   res.json({ ok: true });
 });
 
-app.post('/reminders/:id/restore', async (req, res) => {
+app.post('/reminders/:id/restore', requireAuth, async (req, res) => {
   const { id } = req.params;
   const result = await pool.query(
-    'UPDATE reminders SET deleted_at = NULL WHERE id = $1 AND deleted_at IS NOT NULL RETURNING *',
-    [id]
+    'UPDATE reminders SET deleted_at = NULL WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL RETURNING *',
+    [id, req.userId]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
   res.json(result.rows[0]);
@@ -739,13 +903,15 @@ app.post('/reminders/:id/restore', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
-async function sendPeriodReport(title, sinceDate, untilDate) {
+const TRANSFER_CATEGORY_NAME = 'انتقال وجه بین حساب';
+
+async function sendPeriodReport(title, sinceDate, untilDate, userId, topic) {
   const txRes = await pool.query(
     `SELECT t.*, c.name AS category_name FROM transactions t
      LEFT JOIN categories c ON c.id = t.category_id
-     WHERE t.status = 'confirmed' AND t.created_at >= $1 AND t.created_at < $2
-       AND (c.name IS NULL OR c.name != $3)`,
-    [sinceDate, untilDate, TRANSFER_CATEGORY_NAME]
+     WHERE t.status = 'confirmed' AND t.user_id = $1 AND t.created_at >= $2 AND t.created_at < $3
+       AND (c.name IS NULL OR c.name != $4)`,
+    [userId, sinceDate, untilDate, TRANSFER_CATEGORY_NAME]
   );
   const rows = txRes.rows;
   const expense = rows.filter((t) => t.direction === 'expense').reduce((s, t) => s + Number(t.amount_rial), 0);
@@ -764,93 +930,104 @@ async function sendPeriodReport(title, sinceDate, untilDate) {
   ];
   if (topCategory) lines.push(`بیشترین هزینه: ${topCategory[0]} (${fmt(toToman(topCategory[1]))} ریال)`);
 
-  await sendNtfy({ title, message: lines.join('\n'), priority: 4, tags: ['bar_chart'] });
+  await sendNtfy({ title, message: lines.join('\n'), priority: 4, tags: ['bar_chart'], topic });
 }
 
-const TRANSFER_CATEGORY_NAME = 'انتقال وجه بین حساب';
-
 // ---------- Daily: installment due reminder + monthly report on the 1st of the Jalali month (08:00 Asia/Tehran) ----------
+// Loops over every user so each person's reminders/reports go to their own data and their own ntfy topic.
 cron.schedule('0 8 * * *', async () => {
   try {
     const now = new Date();
     const { jy, jm, jd } = jalaali.toJalaali(now);
-    const dueRes = await pool.query(
-      `SELECT * FROM installments WHERE status = 'active' AND due_day_of_month = $1`,
-      [jd]
-    );
-    for (const inst of dueRes.rows) {
-      await sendNtfy({
-        title: '📅 یادآور قسط',
-        message: `امروز موعد قسط «${inst.title}» است: ${fmt(toToman(inst.installment_amount_rial))} ریال (قسط ${inst.paid_count + 1} از ${inst.total_count})`,
-        priority: 5,
-        tags: ['warning', 'calendar'],
-      });
-    }
-
-    if (jd === 1) {
-      const prevJy = jm === 1 ? jy - 1 : jy;
-      const prevJm = jm === 1 ? 12 : jm - 1;
-      const since = jalaali.toGregorian(prevJy, prevJm, 1);
-      const until = jalaali.toGregorian(jy, jm, 1);
-      await sendPeriodReport(
-        '📊 گزارش ماه گذشته',
-        new Date(since.gy, since.gm - 1, since.gd),
-        new Date(until.gy, until.gm - 1, until.gd)
+    const usersRes = await pool.query('SELECT * FROM users');
+    for (const user of usersRes.rows) {
+      const topic = user.ntfy_topic;
+      const dueRes = await pool.query(
+        `SELECT * FROM installments WHERE status = 'active' AND due_day_of_month = $1 AND user_id = $2`,
+        [jd, user.id]
       );
-    }
-
-    // Salary check: pay period for a Jalali month runs from the last few days of the
-    // previous month through day 2 of the current month. Warn on day 3 if nothing landed.
-    if (jd === 3) {
-      const prevJy = jm === 1 ? jy - 1 : jy;
-      const prevJm = jm === 1 ? 12 : jm - 1;
-      const prevMonthLength = jalaali.jalaaliMonthLength(prevJy, prevJm);
-      const windowStart = jalaali.toGregorian(prevJy, prevJm, prevMonthLength);
-      const windowEndG = jalaali.toGregorian(jy, jm, 3);
-      const since = new Date(windowStart.gy, windowStart.gm - 1, windowStart.gd);
-      const until = new Date(windowEndG.gy, windowEndG.gm - 1, windowEndG.gd);
-      const salaryRes = await pool.query(
-        `SELECT t.id FROM transactions t
-         JOIN categories c ON c.id = t.category_id
-         WHERE t.deleted_at IS NULL AND t.direction = 'income' AND c.name = 'درآمد کار'
-           AND t.created_at >= $1 AND t.created_at < $2`,
-        [since, until]
-      );
-      if (salaryRes.rows.length === 0) {
+      for (const inst of dueRes.rows) {
         await sendNtfy({
-          title: '⚠️ حقوق دریافت نشده؟',
-          message: `تا الان (روز ۳ ماه) هیچ تراکنش «درآمد کار»ی برای این دوره ثبت نشده. اگه حقوقت اومده، توی برنامه ثبتش کن.`,
-          priority: 4,
-          tags: ['warning'],
+          title: '📅 یادآور قسط',
+          message: `امروز موعد قسط «${inst.title}» است: ${fmt(toToman(inst.installment_amount_rial))} ریال (قسط ${inst.paid_count + 1} از ${inst.total_count})`,
+          priority: 5,
+          tags: ['warning', 'calendar'],
+          topic,
         });
       }
-    }
 
-    // Low balance check
-    const accountsRes = await pool.query(
-      `SELECT * FROM accounts WHERE low_balance_threshold_rial IS NOT NULL AND balance_rial < low_balance_threshold_rial`
-    );
-    for (const acc of accountsRes.rows) {
-      await sendNtfy({
-        title: '🔴 موجودی کم',
-        message: `حساب ${acc.display_name} از حد هشدار موجودی که تعیین کردی پایین‌تر رفته.`,
-        priority: 4,
-        tags: ['warning'],
-      });
-    }
+      if (jd === 1) {
+        const prevJy = jm === 1 ? jy - 1 : jy;
+        const prevJm = jm === 1 ? 12 : jm - 1;
+        const since = jalaali.toGregorian(prevJy, prevJm, 1);
+        const until = jalaali.toGregorian(jy, jm, 1);
+        await sendPeriodReport(
+          '📊 گزارش ماه گذشته',
+          new Date(since.gy, since.gm - 1, since.gd),
+          new Date(until.gy, until.gm - 1, until.gd),
+          user.id,
+          topic
+        );
+      }
 
-    // Debt/receivable due reminders
-    const debtsRes = await pool.query(
-      `SELECT * FROM debts WHERE deleted_at IS NULL AND status = 'open' AND due_date IS NOT NULL AND due_date <= CURRENT_DATE`
-    );
-    for (const debt of debtsRes.rows) {
-      const label = debt.type === 'i_owe' ? `بدهی به ${debt.person_name}` : `طلب از ${debt.person_name}`;
-      await sendNtfy({
-        title: '💰 یادآور بدهی/طلب',
-        message: `${label}: ${fmt(toToman(debt.amount_rial))} ریال — سررسید گذشته یا امروزه`,
-        priority: 4,
-        tags: ['moneybag'],
-      });
+      // Salary check: pay period for a Jalali month runs from the last few days of the
+      // previous month through day 2 of the current month. Warn on day 3 if nothing landed.
+      if (jd === 3) {
+        const prevJy = jm === 1 ? jy - 1 : jy;
+        const prevJm = jm === 1 ? 12 : jm - 1;
+        const prevMonthLength = jalaali.jalaaliMonthLength(prevJy, prevJm);
+        const windowStart = jalaali.toGregorian(prevJy, prevJm, prevMonthLength);
+        const windowEndG = jalaali.toGregorian(jy, jm, 3);
+        const since = new Date(windowStart.gy, windowStart.gm - 1, windowStart.gd);
+        const until = new Date(windowEndG.gy, windowEndG.gm - 1, windowEndG.gd);
+        const salaryRes = await pool.query(
+          `SELECT t.id FROM transactions t
+           JOIN categories c ON c.id = t.category_id
+           WHERE t.deleted_at IS NULL AND t.user_id = $1 AND t.direction = 'income' AND c.name = 'درآمد کار'
+             AND t.created_at >= $2 AND t.created_at < $3`,
+          [user.id, since, until]
+        );
+        if (salaryRes.rows.length === 0) {
+          await sendNtfy({
+            title: '⚠️ حقوق دریافت نشده؟',
+            message: `تا الان (روز ۳ ماه) هیچ تراکنش «درآمد کار»ی برای این دوره ثبت نشده. اگه حقوقت اومده، توی برنامه ثبتش کن.`,
+            priority: 4,
+            tags: ['warning'],
+            topic,
+          });
+        }
+      }
+
+      // Low balance check
+      const accountsRes = await pool.query(
+        `SELECT * FROM accounts WHERE user_id = $1 AND low_balance_threshold_rial IS NOT NULL AND balance_rial < low_balance_threshold_rial`,
+        [user.id]
+      );
+      for (const acc of accountsRes.rows) {
+        await sendNtfy({
+          title: '🔴 موجودی کم',
+          message: `حساب ${acc.display_name} از حد هشدار موجودی که تعیین کردی پایین‌تر رفته.`,
+          priority: 4,
+          tags: ['warning'],
+          topic,
+        });
+      }
+
+      // Debt/receivable due reminders
+      const debtsRes = await pool.query(
+        `SELECT * FROM debts WHERE deleted_at IS NULL AND status = 'open' AND due_date IS NOT NULL AND due_date <= CURRENT_DATE AND user_id = $1`,
+        [user.id]
+      );
+      for (const debt of debtsRes.rows) {
+        const label = debt.type === 'i_owe' ? `بدهی به ${debt.person_name}` : `طلب از ${debt.person_name}`;
+        await sendNtfy({
+          title: '💰 یادآور بدهی/طلب',
+          message: `${label}: ${fmt(toToman(debt.amount_rial))} ریال — سررسید گذشته یا امروزه`,
+          priority: 4,
+          tags: ['moneybag'],
+          topic,
+        });
+      }
     }
   } catch (err) {
     console.error('cron error', err);
@@ -861,7 +1038,8 @@ cron.schedule('0 8 * * *', async () => {
 cron.schedule('*/5 * * * *', async () => {
   try {
     const dueRes = await pool.query(
-      `SELECT * FROM reminders WHERE deleted_at IS NULL AND sent = false AND remind_at <= now()`
+      `SELECT r.*, u.ntfy_topic FROM reminders r LEFT JOIN users u ON u.id = r.user_id
+       WHERE r.deleted_at IS NULL AND r.sent = false AND r.remind_at <= now()`
     );
     for (const r of dueRes.rows) {
       await sendNtfy({
@@ -869,6 +1047,7 @@ cron.schedule('*/5 * * * *', async () => {
         message: r.note ? `${r.title}\n${r.note}` : r.title,
         priority: 5,
         tags: ['alarm_clock'],
+        topic: r.ntfy_topic,
       });
       await pool.query('UPDATE reminders SET sent = true WHERE id = $1', [r.id]);
     }
@@ -882,7 +1061,10 @@ cron.schedule('0 8 * * 6', async () => {
   try {
     const until = new Date();
     const since = new Date(until.getTime() - 7 * 24 * 60 * 60 * 1000);
-    await sendPeriodReport('📊 گزارش هفته گذشته', since, until);
+    const usersRes = await pool.query('SELECT * FROM users');
+    for (const user of usersRes.rows) {
+      await sendPeriodReport('📊 گزارش هفته گذشته', since, until, user.id, user.ntfy_topic);
+    }
   } catch (err) {
     console.error('cron error', err);
   }
@@ -911,6 +1093,7 @@ async function updateInvestmentPrices() {
     const priceBySymbol = {};
     allItems.forEach((item) => { priceBySymbol[item.symbol] = item.price; });
 
+    // Applies to every user's investments alike -- market prices aren't per-user.
     const investmentsRes = await pool.query(
       `SELECT * FROM investments WHERE asset_type IN ('dollar','gold','coin') AND quantity IS NOT NULL`
     );
@@ -933,10 +1116,10 @@ async function updateInvestmentPrices() {
 // Every 6 hours
 cron.schedule('0 */6 * * *', updateInvestmentPrices);
 
-app.post('/investments/refresh-prices', async (req, res) => {
+app.post('/investments/refresh-prices', requireAuth, async (req, res) => {
   if (!process.env.BRSAPI_KEY) return res.status(400).json({ error: 'BRSAPI_KEY not configured' });
   await updateInvestmentPrices();
-  const result = await pool.query('SELECT * FROM investments ORDER BY created_at DESC');
+  const result = await pool.query('SELECT * FROM investments WHERE user_id = $1 ORDER BY created_at DESC', [req.userId]);
   res.json(result.rows);
 });
 

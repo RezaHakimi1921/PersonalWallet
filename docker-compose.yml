@@ -24,6 +24,7 @@ services:
       NTFY_TOPIC: "${NTFY_TOPIC}"
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL}"
       BRSAPI_KEY: "${BRSAPI_KEY}"
+      AUTH_SECRET: "${AUTH_SECRET}"
       TZ: "Asia/Tehran"
     depends_on:
       db:
