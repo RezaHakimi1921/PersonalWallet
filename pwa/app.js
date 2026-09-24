@@ -217,25 +217,88 @@ function showAuthScreen(mode) {
 
 function renderAuthForm(mode) {
   const isLogin = mode === 'login';
+
+  if (isLogin) {
+    authForm.innerHTML = `
+      <input id="auth-phone" placeholder="شماره موبایل (09xxxxxxxxx)" inputmode="tel" autocomplete="tel" />
+      <input id="auth-password" type="password" placeholder="رمز عبور" autocomplete="current-password" />
+      <div id="auth-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
+      <button class="action" id="auth-submit">ورود</button>
+      <button class="action secondary" id="auth-toggle">حساب نداری؟ ثبت‌نام کن</button>
+    `;
+    document.getElementById('auth-toggle').addEventListener('click', () => renderAuthForm('register'));
+    onClickLocked(document.getElementById('auth-submit'), async () => {
+      const phone = document.getElementById('auth-phone').value.trim();
+      const password = document.getElementById('auth-password').value;
+      const errorEl = document.getElementById('auth-error');
+      errorEl.textContent = '';
+      if (!phone || !password) { errorEl.textContent = 'شماره موبایل و رمز عبور رو وارد کن'; return; }
+      try {
+        const res = await fetch(`${API}/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone, password }),
+        });
+        const data = await res.json();
+        if (!res.ok) { errorEl.textContent = data.error || 'خطایی پیش اومد'; return; }
+        await bootstrapApp();
+      } catch (e) {
+        errorEl.textContent = 'اتصال برقرار نشد';
+      }
+    });
+    return;
+  }
+
+  // Registration step 1: phone + password -> request an OTP sent to that phone.
   authForm.innerHTML = `
-    <input id="auth-username" placeholder="نام کاربری" autocomplete="username" />
-    <input id="auth-password" type="password" placeholder="رمز عبور" autocomplete="${isLogin ? 'current-password' : 'new-password'}" />
+    <input id="auth-phone" placeholder="شماره موبایل (09xxxxxxxxx)" inputmode="tel" autocomplete="tel" />
+    <input id="auth-password" type="password" placeholder="رمز عبور (حداقل ۶ کاراکتر)" autocomplete="new-password" />
     <div id="auth-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
-    <button class="action" id="auth-submit">${isLogin ? 'ورود' : 'ثبت‌نام'}</button>
-    <button class="action secondary" id="auth-toggle">${isLogin ? 'حساب نداری؟ ثبت‌نام کن' : 'قبلاً ثبت‌نام کردی؟ وارد شو'}</button>
+    <button class="action" id="auth-submit">دریافت کد تأیید</button>
+    <button class="action secondary" id="auth-toggle">قبلاً ثبت‌نام کردی؟ وارد شو</button>
   `;
-  document.getElementById('auth-toggle').addEventListener('click', () => renderAuthForm(isLogin ? 'register' : 'login'));
+  document.getElementById('auth-toggle').addEventListener('click', () => renderAuthForm('login'));
   onClickLocked(document.getElementById('auth-submit'), async () => {
-    const username = document.getElementById('auth-username').value.trim();
+    const phone = document.getElementById('auth-phone').value.trim();
     const password = document.getElementById('auth-password').value;
     const errorEl = document.getElementById('auth-error');
     errorEl.textContent = '';
-    if (!username || !password) { errorEl.textContent = 'نام کاربری و رمز عبور رو وارد کن'; return; }
+    if (!phone || !password || password.length < 6) { errorEl.textContent = 'شماره موبایل و رمز عبور (حداقل ۶ کاراکتر) رو وارد کن'; return; }
     try {
-      const res = await fetch(`${API}/auth/${isLogin ? 'login' : 'register'}`, {
+      const res = await fetch(`${API}/auth/request-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ phone }),
+      });
+      const data = await res.json();
+      if (!res.ok) { errorEl.textContent = data.error || 'ارسال کد ناموفق بود'; return; }
+      renderOtpStep(phone, password);
+    } catch (e) {
+      errorEl.textContent = 'اتصال برقرار نشد';
+    }
+  });
+}
+
+// Registration step 2: enter the code that was texted to the phone from step 1.
+function renderOtpStep(phone, password) {
+  authForm.innerHTML = `
+    <div class="muted" style="font-size:.8rem">کد ۵ رقمی ارسال‌شده به ${phone} رو وارد کن</div>
+    <input id="auth-otp" placeholder="کد تأیید" inputmode="numeric" />
+    <div id="auth-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
+    <button class="action" id="auth-otp-submit">تأیید و ثبت‌نام</button>
+    <button class="action secondary" id="auth-otp-back">بازگشت</button>
+  `;
+  document.getElementById('auth-otp-back').addEventListener('click', () => renderAuthForm('register'));
+  onClickLocked(document.getElementById('auth-otp-submit'), async () => {
+    const otp = document.getElementById('auth-otp').value.trim();
+    const errorEl = document.getElementById('auth-error');
+    errorEl.textContent = '';
+    if (!otp) { errorEl.textContent = 'کد تأیید رو وارد کن'; return; }
+    try {
+      const res = await fetch(`${API}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, password, otp }),
       });
       const data = await res.json();
       if (!res.ok) { errorEl.textContent = data.error || 'خطایی پیش اومد'; return; }
@@ -262,8 +325,8 @@ function openAccountSettingsModal() {
   manualModal.innerHTML = `
     <div class="card">
       <strong>حساب کاربری</strong>
-      <div class="muted" style="margin-top:8px;font-size:.8rem">نام کاربری</div>
-      <div class="font-num">${currentUser.username}</div>
+      <div class="muted" style="margin-top:8px;font-size:.8rem">شماره موبایل</div>
+      <div class="font-num">${currentUser.phone}</div>
 
       <div class="muted" style="margin-top:12px;font-size:.8rem">آدرس وب‌هوک پیامک بانکی (برای iOS Shortcuts)</div>
       <textarea readonly class="sms-text" style="min-height:50px;font-size:.7rem" id="acc-webhook-url">${webhookUrl}</textarea>

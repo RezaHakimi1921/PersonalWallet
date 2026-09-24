@@ -46,10 +46,25 @@ async function migrateAuth() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
-      username TEXT UNIQUE NOT NULL,
+      username TEXT UNIQUE,
       password_hash TEXT NOT NULL,
       api_key TEXT UNIQUE NOT NULL,
       ntfy_topic TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  // Registration moved from username to phone+OTP verification; username is kept
+  // (nullable) only so any pre-existing rows aren't broken by the column going away.
+  await pool.query(`ALTER TABLE users ALTER COLUMN username DROP NOT NULL`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT UNIQUE`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS otp_codes (
+      id SERIAL PRIMARY KEY,
+      phone TEXT NOT NULL,
+      code TEXT NOT NULL,
+      purpose TEXT NOT NULL DEFAULT 'register',
+      expires_at TIMESTAMPTZ NOT NULL,
+      consumed BOOLEAN NOT NULL DEFAULT false,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `);
@@ -144,39 +159,101 @@ async function resolveUserByApiKey(apiKey) {
 
 const COOKIE_OPTS = { httpOnly: true, sameSite: 'lax', secure: true, maxAge: 90 * 24 * 60 * 60 * 1000 };
 
+// Accepts 09xxxxxxxxx, +989xxxxxxxxx, 00989xxxxxxxxx, or with spaces/dashes;
+// returns the normalized 09xxxxxxxxx form, or null if not a valid Iranian mobile number.
+function normalizeIranianPhone(raw) {
+  if (!raw) return null;
+  let p = String(raw).replace(/[\s-]/g, '');
+  if (p.startsWith('+98')) p = '0' + p.slice(3);
+  else if (p.startsWith('0098')) p = '0' + p.slice(4);
+  else if (p.startsWith('98') && p.length === 12) p = '0' + p.slice(2);
+  return /^09\d{9}$/.test(p) ? p : null;
+}
+
+// Sends a one-time code via Kavenegar (https://kavenegar.com), a common Iranian SMS
+// provider. Requires KAVENEGAR_API_KEY; without it, OTP requests fail loudly instead
+// of silently pretending to succeed.
+async function sendOtpSms(phone, code) {
+  const apiKey = process.env.KAVENEGAR_API_KEY;
+  if (!apiKey) throw new Error('KAVENEGAR_API_KEY تنظیم نشده — از سرور یه کلید کاوه‌نگار بگیر و بذار توی .env');
+  const message = `کد تأیید کیف پول شخصی: ${code}`;
+  const url = `https://api.kavenegar.com/v1/${apiKey}/sms/send.json?receptor=${encodeURIComponent(phone)}&message=${encodeURIComponent(message)}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if (!res.ok || data?.return?.status !== 200) {
+    throw new Error(data?.return?.message || 'ارسال پیامک OTP ناموفق بود');
+  }
+}
+
+const OTP_TTL_MS = 2 * 60 * 1000;
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
+
+app.post('/auth/request-otp', async (req, res) => {
+  const phone = normalizeIranianPhone(req.body?.phone);
+  if (!phone) return res.status(400).json({ error: 'شماره موبایل معتبر نیست' });
+  try {
+    const recent = await pool.query(
+      `SELECT id FROM otp_codes WHERE phone = $1 AND purpose = 'register' AND created_at > now() - interval '${OTP_RESEND_COOLDOWN_MS / 1000} seconds'`,
+      [phone]
+    );
+    if (recent.rows.length > 0) return res.status(429).json({ error: 'کمی صبر کن و دوباره امتحان کن' });
+
+    const code = String(crypto.randomInt(10000, 99999));
+    await sendOtpSms(phone, code);
+    await pool.query(
+      `INSERT INTO otp_codes (phone, code, purpose, expires_at) VALUES ($1, $2, 'register', now() + interval '${OTP_TTL_MS / 1000} seconds')`,
+      [phone, code]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('otp send error', err);
+    res.status(500).json({ error: err.message || 'ارسال کد ناموفق بود' });
+  }
+});
+
 app.post('/auth/register', async (req, res) => {
-  const { username, password } = req.body || {};
-  if (!username || !password || password.length < 6) {
-    return res.status(400).json({ error: 'username and a password (6+ chars) are required' });
+  const phone = normalizeIranianPhone(req.body?.phone);
+  const { password, otp } = req.body || {};
+  if (!phone || !password || password.length < 6 || !otp) {
+    return res.status(400).json({ error: 'شماره موبایل، رمز عبور (۶ رقم یا بیشتر) و کد تأیید لازمه' });
   }
   try {
+    const otpRes = await pool.query(
+      `SELECT * FROM otp_codes WHERE phone = $1 AND code = $2 AND purpose = 'register' AND consumed = false AND expires_at > now()
+       ORDER BY created_at DESC LIMIT 1`,
+      [phone, String(otp)]
+    );
+    if (otpRes.rows.length === 0) return res.status(400).json({ error: 'کد تأیید اشتباهه یا منقضی شده' });
+
     const password_hash = await bcrypt.hash(password, 10);
     const api_key = crypto.randomBytes(24).toString('hex');
     const result = await pool.query(
-      'INSERT INTO users (username, password_hash, api_key) VALUES ($1, $2, $3) RETURNING id, username',
-      [username, password_hash, api_key]
+      'INSERT INTO users (phone, password_hash, api_key) VALUES ($1, $2, $3) RETURNING id, phone',
+      [phone, password_hash, api_key]
     );
     const user = result.rows[0];
+    await pool.query('UPDATE otp_codes SET consumed = true WHERE id = $1', [otpRes.rows[0].id]);
     await backfillDefaultUser();
     res.cookie('session', signToken(user.id), COOKIE_OPTS);
-    res.json({ ok: true, username: user.username });
+    res.json({ ok: true, phone: user.phone });
   } catch (err) {
-    if (err.code === '23505') return res.status(409).json({ error: 'این نام کاربری قبلاً گرفته شده' });
+    if (err.code === '23505') return res.status(409).json({ error: 'این شماره قبلاً ثبت‌نام کرده' });
     console.error(err);
     res.status(500).json({ error: 'internal error' });
   }
 });
 
 app.post('/auth/login', async (req, res) => {
-  const { username, password } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: 'username and password required' });
-  const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+  const phone = normalizeIranianPhone(req.body?.phone);
+  const { password } = req.body || {};
+  if (!phone || !password) return res.status(400).json({ error: 'شماره موبایل و رمز عبور لازمه' });
+  const result = await pool.query('SELECT * FROM users WHERE phone = $1', [phone]);
   const user = result.rows[0];
   if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-    return res.status(401).json({ error: 'نام کاربری یا رمز اشتباهه' });
+    return res.status(401).json({ error: 'شماره موبایل یا رمز اشتباهه' });
   }
   res.cookie('session', signToken(user.id), COOKIE_OPTS);
-  res.json({ ok: true, username: user.username });
+  res.json({ ok: true, phone: user.phone });
 });
 
 app.post('/auth/logout', (req, res) => {
@@ -185,7 +262,7 @@ app.post('/auth/logout', (req, res) => {
 });
 
 app.get('/auth/me', requireAuth, async (req, res) => {
-  const result = await pool.query('SELECT id, username, api_key, ntfy_topic FROM users WHERE id = $1', [req.userId]);
+  const result = await pool.query('SELECT id, phone, api_key, ntfy_topic FROM users WHERE id = $1', [req.userId]);
   if (result.rows.length === 0) return res.status(401).json({ error: 'unauthorized' });
   res.json(result.rows[0]);
 });
