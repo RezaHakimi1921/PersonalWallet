@@ -206,6 +206,7 @@ const appRoot = document.getElementById('app-root');
 function showApp() {
   authScreen.hidden = true;
   appRoot.hidden = false;
+  pauseGoldCoin();
 }
 
 function showAuthScreen(mode) {
@@ -213,6 +214,92 @@ function showAuthScreen(mode) {
   appRoot.hidden = true;
   authScreen.hidden = false;
   renderAuthForm(mode || 'login');
+  initGoldCoin();
+}
+
+// A small decorative rotating 3D gold coin above the login/register card.
+// Lazy-loads Three.js (only needed on this screen) and pauses its render loop
+// whenever the auth screen isn't visible, so it costs nothing once logged in.
+let threeJsLoadPromise = null;
+function loadThreeJs() {
+  if (!threeJsLoadPromise) {
+    threeJsLoadPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+  }
+  return threeJsLoadPromise;
+}
+
+let coinInitStarted = false;
+let coinAnimFrame = null;
+let coinTick = null;
+
+function pauseGoldCoin() {
+  if (coinAnimFrame != null) { cancelAnimationFrame(coinAnimFrame); coinAnimFrame = null; }
+}
+
+async function initGoldCoin() {
+  if (coinInitStarted) { if (coinTick && coinAnimFrame == null) coinTick(); return; }
+  coinInitStarted = true;
+  const canvas = document.getElementById('coin-canvas');
+  try {
+    await loadThreeJs();
+  } catch (e) {
+    canvas.style.display = 'none';
+    return;
+  }
+  if (!window.THREE) { canvas.style.display = 'none'; return; }
+
+  const size = 140;
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
+  camera.position.set(0, 0.5, 5.2);
+  camera.lookAt(0, 0, 0);
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setSize(size, size, false);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+
+  const gold = new THREE.MeshStandardMaterial({ color: 0xf5b942, metalness: 0.85, roughness: 0.28, emissive: 0x3a2400, emissiveIntensity: 0.12 });
+  const goldDark = new THREE.MeshStandardMaterial({ color: 0xb45309, metalness: 0.85, roughness: 0.35 });
+
+  const coinGroup = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 0.22, 64), gold);
+  body.rotation.x = Math.PI / 2;
+  coinGroup.add(body);
+
+  const rimFront = new THREE.Mesh(new THREE.TorusGeometry(1.42, 0.055, 12, 64), goldDark);
+  coinGroup.add(rimFront);
+  const rimBack = rimFront.clone();
+  coinGroup.add(rimBack);
+
+  const emblemFront = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 0.85, 0.05, 48), goldDark);
+  emblemFront.rotation.x = Math.PI / 2;
+  emblemFront.position.z = 0.135;
+  coinGroup.add(emblemFront);
+  const emblemBack = emblemFront.clone();
+  emblemBack.position.z = -0.135;
+  coinGroup.add(emblemBack);
+
+  scene.add(coinGroup);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const key = new THREE.DirectionalLight(0xffffff, 1.1);
+  key.position.set(3, 4, 5);
+  scene.add(key);
+  const fill = new THREE.DirectionalLight(0xfff4d6, 0.6);
+  fill.position.set(-4, -2, 2);
+  scene.add(fill);
+
+  coinTick = () => {
+    coinGroup.rotation.y += 0.014;
+    coinGroup.rotation.x = Math.sin(Date.now() / 2200) * 0.12;
+    renderer.render(scene, camera);
+    coinAnimFrame = requestAnimationFrame(coinTick);
+  };
+  coinTick();
 }
 
 // Renders the "یا با گوگل وارد شو" divider + button into #google-btn-slot, if the
