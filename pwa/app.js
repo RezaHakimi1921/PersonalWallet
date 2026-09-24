@@ -1740,8 +1740,9 @@ function netWorthChartSvg(snapshots) {
 }
 
 async function renderAnalytics() {
-  const [txs, categories, accounts, netWorthHistory] = await Promise.all([
+  const [txs, categories, accounts, netWorthHistory, installmentsAll, debtsAll, dataQuality] = await Promise.all([
     api('/transactions'), api('/categories'), api('/accounts'), api('/net-worth/history'),
+    api('/installments'), api('/debts'), api('/data-quality'),
   ]);
   const confirmed = txs.filter((t) => t.status === 'confirmed' && !isNonFlowCategory(t.category_name));
   const totalCash = accounts.reduce((s, a) => s + Number(a.balance_rial), 0);
@@ -1885,6 +1886,39 @@ async function renderAnalytics() {
     .filter((g) => g.months.size >= 3)
     .sort((a, b) => b.amount - a.amount);
 
+  // 90-day cash flow calendar: upcoming installment due dates (projected forward
+  // month by month) and debts/receivables with a due date, merged and sorted.
+  const CASH_FLOW_DAYS_AHEAD = 90;
+  const upcomingEvents = [];
+  installmentsAll.filter((i) => i.status === 'active').forEach((inst) => {
+    for (let m = 0; m <= 4; m++) {
+      const { jy, jm } = shiftJalaliMonth(nowJalali.jy, nowJalali.jm, m);
+      const dim = Jalali.monthLength(jy, jm);
+      const day = Math.min(inst.due_day_of_month, dim);
+      const g = Jalali.toGregorian(jy, jm, day);
+      const date = new Date(g.gy, g.gm - 1, g.gd);
+      const diffDays = Math.round((date - now) / 86400000);
+      if (diffDays >= 0 && diffDays <= CASH_FLOW_DAYS_AHEAD) {
+        upcomingEvents.push({ date, diffDays, title: `قسط: ${inst.title}`, amount: Number(inst.installment_amount_rial), kind: 'installment' });
+      }
+    }
+  });
+  debtsAll.filter((d) => d.status === 'open' && d.due_date).forEach((d) => {
+    const date = new Date(d.due_date);
+    const diffDays = Math.round((date - now) / 86400000);
+    if (diffDays >= 0 && diffDays <= CASH_FLOW_DAYS_AHEAD) {
+      upcomingEvents.push({
+        date, diffDays,
+        title: `${d.type === 'i_owe' ? 'بدهی به' : 'طلب از'} ${d.person_name}`,
+        amount: Number(d.amount_rial),
+        kind: d.type === 'i_owe' ? 'debt_out' : 'debt_in',
+      });
+    }
+  });
+  upcomingEvents.sort((a, b) => a.date - b.date);
+  const upcomingOutflow = upcomingEvents.filter((e) => e.kind !== 'debt_in').reduce((s, e) => s + e.amount, 0);
+  const upcomingInflow = upcomingEvents.filter((e) => e.kind === 'debt_in').reduce((s, e) => s + e.amount, 0);
+
   content.innerHTML = `
     <div class="card">
       <div class="row">
@@ -1923,6 +1957,39 @@ async function renderAnalytics() {
       <strong class="privacy-target font-num" style="font-size:1.1rem">${runwayMonths != null ? `${runwayMonths.toFixed(1)} ماه` : 'داده کافی نیست'}</strong>
       <div class="muted" style="font-size:.7rem;margin-top:4px">بر اساس میانگین هزینه‌ی ۳ ماه اخیر (${toman(Math.round(burnRate3))} ریال/ماه) و نقدینگی فعلی (${toman(totalCash)} ریال)</div>
     </div>
+
+    <div class="card">
+      <strong>تقویم تعهدات ۹۰ روز آینده</strong>
+      <div class="row muted font-num" style="font-size:.7rem;margin-top:6px">
+        <span>مجموع خروجی: <span style="color:var(--red)">${toman(upcomingOutflow)}</span></span>
+        <span>مجموع ورودی: <span style="color:var(--green)">${toman(upcomingInflow)}</span></span>
+      </div>
+      ${upcomingEvents.length === 0 ? '<p class="muted" style="margin-top:8px">هیچ تعهد سررسیددار ثبت‌شده‌ای توی ۹۰ روز آینده نیست.</p>' : upcomingEvents.map((e) => `
+        <div class="row" style="margin-top:8px;font-size:.75rem">
+          <span>${e.title} · <span class="muted">${e.diffDays === 0 ? 'امروز' : `${e.diffDays} روز دیگه`}</span></span>
+          <span class="font-num" style="color:${e.kind === 'debt_in' ? 'var(--green)' : 'var(--red)'}">${toman(e.amount)} ریال</span>
+        </div>
+      `).join('')}
+    </div>
+
+    ${(dataQuality.uncategorized.length + dataQuality.unparsed_sms.length + dataQuality.duplicate_flagged.length) > 0 ? `
+      <div class="card" style="border-color:rgba(245,158,11,.4)">
+        <strong>🔍 گزارش کیفیت داده</strong>
+        ${dataQuality.uncategorized.length > 0 ? `<div class="row muted" style="margin-top:8px;font-size:.75rem"><span>تراکنش بدون دسته‌بندی</span><span class="font-num">${dataQuality.uncategorized.length}</span></div>` : ''}
+        ${dataQuality.unparsed_sms.length > 0 ? `<div class="row muted" style="margin-top:6px;font-size:.75rem"><span>پیامک بانکی پارس‌نشده</span><span class="font-num">${dataQuality.unparsed_sms.length}</span></div>` : ''}
+        ${dataQuality.duplicate_flagged.length > 0 ? `<div class="row muted" style="margin-top:6px;font-size:.75rem"><span>تراکنش مشکوک به تکراری</span><span class="font-num">${dataQuality.duplicate_flagged.length}</span></div>` : ''}
+        ${dataQuality.unparsed_sms.length > 0 ? `
+          <div style="margin-top:10px;border-top:1px solid var(--border-soft);padding-top:8px">
+            ${dataQuality.unparsed_sms.slice(0, 5).map((s) => `
+              <div class="row" style="font-size:.7rem;margin-top:6px;align-items:flex-start">
+                <span class="muted" style="white-space:pre-line">${s.bank_code} · ${formatJalaliDateTime(new Date(s.created_at))}<br>${s.raw_text.slice(0, 60)}${s.raw_text.length > 60 ? '…' : ''}</span>
+                <button class="action secondary" data-dismiss-unparsed="${s.id}" style="width:auto;padding:2px 8px;font-size:.65rem">رد کردن</button>
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
+      </div>
+    ` : ''}
 
     ${biggestExpenses.length > 0 ? `
       <div class="card">
@@ -2030,6 +2097,12 @@ async function renderAnalytics() {
     if (isCurrentMonth) return;
     analyticsMonth = shiftJalaliMonth(selY, selM, 1);
     renderAnalytics();
+  });
+  document.querySelectorAll('[data-dismiss-unparsed]').forEach((b) => {
+    onClickLocked(b, async () => {
+      await api(`/unparsed-sms/${b.dataset.dismissUnparsed}`, { method: 'DELETE' });
+      renderAnalytics();
+    });
   });
 }
 

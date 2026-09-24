@@ -65,6 +65,18 @@ pool.query(`
   )
 `).catch((err) => console.error('net_worth_snapshots migration error', err));
 
+// Self-migrating: unparsed SMS used to only fire a push notification and leave no
+// record -- easy to miss, impossible to review later. Now kept for the data-quality report.
+pool.query(`
+  CREATE TABLE IF NOT EXISTS unparsed_sms (
+    id SERIAL PRIMARY KEY,
+    bank_code TEXT NOT NULL,
+    raw_text TEXT NOT NULL,
+    user_id INT REFERENCES users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+`).catch((err) => console.error('unparsed_sms migration error', err));
+
 // Self-migrating: multi-user auth. Each user gets their own fully separate wallet
 // (accounts/transactions/etc. are scoped by user_id). Existing single-user data,
 // created before this migration, has a NULL user_id; once exactly one user exists
@@ -381,11 +393,33 @@ app.post('/webhook/sms/:apiKey', async (req, res) => {
       return res.status(404).json({ error: `unknown bank code: ${bank}` });
     }
     const account = accountRes.rows[0];
+
+    // Idempotency: the exact same SMS text for this account within the last 5
+    // minutes is treated as a retry of the same webhook call (e.g. an iOS
+    // Shortcut re-running after a timeout), not a second real transaction --
+    // a real second transaction from the bank would have a different balance
+    // or timestamp in its own text. Returns the original instead of re-inserting.
+    const idempotentRes = await client.query(
+      `SELECT id, amount_rial, balance_after_rial FROM transactions
+       WHERE account_id = $1 AND raw_text = $2 AND deleted_at IS NULL AND created_at > now() - interval '5 minutes'
+       ORDER BY created_at DESC LIMIT 1`,
+      [account.id, text]
+    );
+    if (idempotentRes.rows.length > 0) {
+      const existing = idempotentRes.rows[0];
+      return res.json({ ok: true, parsed: true, transaction_id: existing.id, new_balance_rial: existing.balance_after_rial, idempotent_replay: true });
+    }
+
     const parsed = parseSms(bank, text);
 
     if (!parsed) {
-      // Not a transaction SMS (or couldn't be parsed) -- just alert with the raw text
-      // instead of creating a fake zero-amount transaction that clutters the pending list.
+      // Not a transaction SMS (or couldn't be parsed) -- alert immediately, and also
+      // keep a record so it shows up in the data-quality report even if the push
+      // notification gets missed.
+      await client.query(
+        'INSERT INTO unparsed_sms (bank_code, raw_text, user_id) VALUES ($1, $2, $3)',
+        [bank, text, user.id]
+      );
       await sendNtfy({
         title: `⚠️ پیامک ${account.display_name} پارس نشد`,
         message: text,
@@ -1119,6 +1153,42 @@ app.get('/net-worth/history', requireAuth, async (req, res) => {
     [req.userId]
   );
   res.json(result.rows);
+});
+
+// Surfaces things that need a human look: transactions nobody categorized,
+// bank SMS the parser couldn't read, and transactions still flagged as
+// probable duplicates -- instead of these silently sitting unnoticed.
+app.get('/data-quality', requireAuth, async (req, res) => {
+  const [uncategorized, unparsedSms, duplicates] = await Promise.all([
+    pool.query(
+      `SELECT t.id, t.amount_rial, t.direction, t.created_at, a.display_name AS account_name
+       FROM transactions t JOIN accounts a ON a.id = t.account_id
+       WHERE t.user_id = $1 AND t.deleted_at IS NULL AND t.status = 'confirmed' AND t.category_id IS NULL
+       ORDER BY t.created_at DESC LIMIT 50`,
+      [req.userId]
+    ),
+    pool.query(
+      `SELECT id, bank_code, raw_text, created_at FROM unparsed_sms WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
+      [req.userId]
+    ),
+    pool.query(
+      `SELECT t.id, t.amount_rial, t.direction, t.created_at, t.note, a.display_name AS account_name
+       FROM transactions t JOIN accounts a ON a.id = t.account_id
+       WHERE t.user_id = $1 AND t.deleted_at IS NULL AND t.note LIKE '%تکراری%'
+       ORDER BY t.created_at DESC LIMIT 50`,
+      [req.userId]
+    ),
+  ]);
+  res.json({
+    uncategorized: uncategorized.rows,
+    unparsed_sms: unparsedSms.rows,
+    duplicate_flagged: duplicates.rows,
+  });
+});
+
+app.delete('/unparsed-sms/:id', requireAuth, async (req, res) => {
+  await pool.query('DELETE FROM unparsed_sms WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
+  res.json({ ok: true });
 });
 
 // A tiny, read-only summary endpoint for an iOS Shortcuts home-screen widget --
