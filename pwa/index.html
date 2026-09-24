@@ -238,6 +238,85 @@
     background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px;
     padding: 10px; font-size: 0.85rem; width: 100%; margin-top: 8px; font-family: inherit; min-height: 90px; direction: ltr; text-align: right;
   }
+
+  /* OTP verification step: animated digit entry that orbits into a checkmark on success. */
+  .otp-card { position: relative; text-align: center; overflow: hidden; padding-top: 6px; }
+  .otp-card::before {
+    content: ''; position: absolute; inset: 0;
+    background: radial-gradient(circle at 50% 62%, rgba(52,211,153,.22), transparent 60%);
+    opacity: 0; transition: opacity .8s ease; pointer-events: none;
+  }
+  .otp-card.success::before { opacity: 1; }
+  .otp-title { font-size: 1.05rem; font-weight: 700; margin: 4px 0 6px; transition: opacity .3s; }
+  .otp-sub { font-size: .8rem; line-height: 1.6; color: var(--muted); margin: 0; transition: opacity .3s; }
+  .otp-error { font-size: .75rem; color: var(--red); min-height: 1.1em; margin-top: 6px; transition: opacity .3s; }
+  .otp-card.verifying .otp-title, .otp-card.verifying .otp-sub { opacity: .75; }
+  .otp-stage { position: relative; height: 170px; margin-top: 10px; }
+  .otp-digit {
+    position: absolute; left: 50%; top: 50%;
+    width: 46px; height: 46px; margin: -23px 0 0 -23px;
+    border-radius: 12px;
+    background: var(--surface-2);
+    border: 1.5px solid var(--border);
+    color: var(--text);
+    text-align: center;
+    outline: none;
+    padding: 0;
+    transition: border-color .2s, box-shadow .2s;
+    will-change: transform;
+  }
+  .otp-digit:focus {
+    border-color: var(--gold);
+    box-shadow: 0 0 0 3px rgba(245,158,11,.18), 0 0 22px rgba(245,158,11,.35);
+  }
+  .otp-digit.fly {
+    border-color: var(--border);
+    border-right-color: var(--gold);
+    border-bottom-color: var(--gold);
+    box-shadow: 3px 3px 14px rgba(245,158,11,.25);
+    pointer-events: none;
+  }
+  .otp-digit.error { border-color: var(--red); animation: otp-shake .4s; }
+  @keyframes otp-shake { 20%, 60% { translate: -6px 0; } 40%, 80% { translate: 6px 0; } }
+  .otp-ring {
+    position: absolute; left: 50%; top: 50%;
+    width: 100px; height: 100px; margin: -50px 0 0 -50px;
+    border-radius: 50%;
+    border: 2px solid var(--green);
+    box-shadow: 0 0 24px rgba(52,211,153,.16), inset 0 0 24px rgba(52,211,153,.16);
+    display: grid; place-items: center;
+    opacity: 0; transform: scale(.4);
+    transition: opacity .45s ease, transform .6s cubic-bezier(.2,1.4,.4,1);
+  }
+  .otp-ring.show { opacity: 1; transform: scale(1); }
+  .otp-ring .otp-core {
+    width: 38px; height: 38px; border-radius: 10px;
+    border: 2px solid var(--green);
+    background: rgba(52,211,153,.08);
+    display: grid; place-items: center;
+  }
+  .otp-ring .otp-halo {
+    position: absolute; inset: -36px; border-radius: 50%;
+    border: 1px solid rgba(52,211,153,.18);
+    opacity: 0; transform: scale(.8);
+    transition: opacity .6s .15s, transform .8s .15s;
+  }
+  .otp-card.success .otp-ring .otp-halo { opacity: 1; transform: scale(1); }
+  .otp-check path { stroke-dasharray: 24; stroke-dashoffset: 24; transition: stroke-dashoffset .45s .2s ease; }
+  .otp-card.success .otp-check path { stroke-dashoffset: 0; }
+  .otp-foot { height: 22px; margin-top: 8px; font-size: .8rem; position: relative; }
+  .otp-resend-line { color: var(--muted); transition: opacity .3s; }
+  .otp-resend { background: none; border: 0; padding: 0 4px; cursor: pointer; font: 600 .8rem inherit; color: var(--gold); }
+  .otp-resend:disabled { color: var(--muted); cursor: default; }
+  .otp-secured {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    color: var(--green); font-weight: 600;
+    opacity: 0; transition: opacity .4s;
+  }
+  .otp-card.done .otp-resend-line { opacity: 0; pointer-events: none; }
+  .otp-card.show-secured .otp-secured { opacity: 1; }
+  .otp-back { margin-top: 14px; }
 </style>
 </head>
 <body>

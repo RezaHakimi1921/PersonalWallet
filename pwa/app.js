@@ -337,33 +337,248 @@ function renderAuthForm(mode) {
 }
 
 // Registration step 2: enter the code that was texted to the phone from step 1.
+// Registration step 2: an animated 5-box OTP entry. Digits orbit around the
+// center and collapse into a checkmark ring on success, mirroring the reference
+// design the user provided -- adapted from 4 to 5 digits and wired to the real
+// /auth/register + /auth/request-otp endpoints instead of a stub.
 function renderOtpStep(phone, password) {
+  const LENGTH = 5;
   authForm.innerHTML = `
-    <div class="muted" style="font-size:.8rem">کد ۵ رقمی ارسال‌شده به ${phone} رو وارد کن</div>
-    <input id="auth-otp" placeholder="کد تأیید" inputmode="numeric" />
-    <div id="auth-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
-    <button class="action" id="auth-otp-submit">تأیید و ثبت‌نام</button>
-    <button class="action secondary" id="auth-otp-back">بازگشت</button>
+    <div class="otp-card" id="otp-card">
+      <div class="otp-title" id="otp-title">بیا شماره‌ات رو تأیید کنیم</div>
+      <div class="otp-sub" id="otp-sub">یه کد ۵ رقمی به ${phone} فرستادیم.<br>به‌محض کامل شدن، خودکار تأیید می‌شه.</div>
+      <div class="otp-error" id="otp-error"></div>
+      <div class="otp-stage" id="otp-stage">
+        <div class="otp-ring" id="otp-ring">
+          <div class="otp-halo"></div>
+          <div class="otp-core">
+            <svg class="otp-check" width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M4.5 10.5l3.5 3.5 7.5-8" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+      <div class="otp-foot">
+        <div class="otp-resend-line">کد نیومد؟<button class="otp-resend" id="otp-resend" type="button">ارسال دوباره</button></div>
+        <div class="otp-secured">تأیید شد ✓</div>
+      </div>
+    </div>
+    <button class="action secondary otp-back" id="otp-back-btn">بازگشت</button>
   `;
-  document.getElementById('auth-otp-back').addEventListener('click', () => renderAuthForm('register'));
-  onClickLocked(document.getElementById('auth-otp-submit'), async () => {
-    const otp = document.getElementById('auth-otp').value.trim();
-    const errorEl = document.getElementById('auth-error');
+
+  const card = document.getElementById('otp-card');
+  const stage = document.getElementById('otp-stage');
+  const ring = document.getElementById('otp-ring');
+  const title = document.getElementById('otp-title');
+  const sub = document.getElementById('otp-sub');
+  const errorEl = document.getElementById('otp-error');
+  const resendBtn = document.getElementById('otp-resend');
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  document.getElementById('otp-back-btn').addEventListener('click', () => renderAuthForm('register'));
+
+  const SPACING = 54;
+  const rowPos = (i) => ({ x: (i - (LENGTH - 1) / 2) * SPACING, y: 0 });
+  // Final rest positions: 5 points evenly spaced around a circle, starting at the top.
+  const FINAL_ANGLES = [-90, -18, 54, 126, 198].map((a) => a * Math.PI / 180);
+
+  const inputs = [];
+  let busy = false;
+
+  for (let i = 0; i < LENGTH; i++) {
+    const inp = document.createElement('input');
+    inp.className = 'otp-digit font-num';
+    inp.type = 'text';
+    inp.inputMode = 'numeric';
+    inp.maxLength = 1;
+    inp.autocomplete = i === 0 ? 'one-time-code' : 'off';
+    inp.setAttribute('aria-label', `رقم ${i + 1}`);
+    stage.appendChild(inp);
+    inputs.push(inp);
+  }
+
+  function place(el, x, y, r = 0, s = 1, o = 1) {
+    el.style.transform = `translate(${x}px, ${y}px) rotate(${r}rad) scale(${s})`;
+    el.style.opacity = o;
+  }
+  const layoutRow = () => inputs.forEach((el, i) => { const p = rowPos(i); place(el, p.x, p.y); });
+
+  const codeValue = () => inputs.map((i) => i.value).join('');
+  const firstEmpty = () => inputs.findIndex((i) => !i.value);
+
+  function fill(start, digits) {
+    let idx = start;
+    for (const d of digits) {
+      if (idx >= LENGTH) break;
+      inputs[idx++].value = d;
+    }
+    const next = firstEmpty();
+    if (next === -1) submit();
+    else inputs[next].focus();
+  }
+
+  inputs.forEach((inp, i) => {
+    inp.addEventListener('focus', () => {
+      const fe = firstEmpty();
+      if (fe !== -1 && fe < i) inputs[fe].focus();
+      else requestAnimationFrame(() => inp.select());
+    });
+    inp.addEventListener('input', () => {
+      const digits = inp.value.replace(/\D/g, '');
+      inp.value = '';
+      if (digits) fill(i, digits);
+    });
+    inp.addEventListener('keydown', (e) => {
+      if (busy) { e.preventDefault(); return; }
+      if (e.key === 'Backspace') {
+        e.preventDefault();
+        if (inp.value) inp.value = '';
+        else if (i > 0) { inputs[i - 1].value = ''; inputs[i - 1].focus(); }
+      } else if (e.key === 'ArrowLeft' && i > 0) {
+        e.preventDefault(); inputs[i - 1].focus();
+      } else if (e.key === 'ArrowRight' && i < LENGTH - 1 && inp.value) {
+        e.preventDefault(); inputs[i + 1].focus();
+      }
+    });
+    inp.addEventListener('paste', (e) => {
+      e.preventDefault();
+      const digits = (e.clipboardData.getData('text') || '').replace(/\D/g, '');
+      if (digits) fill(0, digits);
+    });
+  });
+
+  const ease = (t) => (t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+  const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+  const clamp = (t) => Math.min(1, Math.max(0, t));
+  const lerp = (a, b, t) => a + (b - a) * t;
+
+  function animate(duration, frame) {
+    return new Promise((res) => {
+      const t0 = performance.now();
+      const tick = (now) => {
+        const t = clamp((now - t0) / duration);
+        frame(t);
+        if (t < 1) requestAnimationFrame(tick); else res();
+      };
+      requestAnimationFrame(tick);
+    });
+  }
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function orbit() {
+    const TOTAL = 2300, GATHER = 450;
+    const SPIN = Math.PI * 2 * 1.25;
+    return animate(TOTAL, (t) => {
+      const ms = t * TOTAL;
+      const g = easeOut(clamp(ms / GATHER));
+      const p = ease(t);
+      const radius = lerp(18, 58, easeOut(clamp(ms / 900))) - 18 * ease(clamp((ms - 1500) / 800));
+      inputs.forEach((el, i) => {
+        const theta = FINAL_ANGLES[i] + SPIN * (1 - p);
+        const c = { x: Math.cos(theta) * radius, y: Math.sin(theta) * radius };
+        const r0 = rowPos(i);
+        const x = lerp(r0.x, c.x, g);
+        const y = lerp(r0.y, c.y, g);
+        const rot = g * (theta - FINAL_ANGLES[i]) * 0.55;
+        place(el, x, y, rot);
+      });
+    });
+  }
+
+  function collapse() {
+    const from = inputs.map((el, i) => ({
+      x: Math.cos(FINAL_ANGLES[i]) * 40, y: Math.sin(FINAL_ANGLES[i]) * 40,
+    }));
+    return animate(420, (t) => {
+      const e = ease(t);
+      inputs.forEach((el, i) => place(el, lerp(from[i].x, 0, e), lerp(from[i].y, 0, e), 0, lerp(1, .3, e), 1 - e));
+    });
+  }
+
+  function swapText(t, s) {
+    title.style.opacity = sub.style.opacity = 0;
+    setTimeout(() => {
+      title.textContent = t;
+      sub.innerHTML = s;
+      title.style.opacity = sub.style.opacity = '';
+    }, 250);
+  }
+
+  async function submit() {
+    if (busy) return;
+    busy = true;
     errorEl.textContent = '';
-    if (!otp) { errorEl.textContent = 'کد تأیید رو وارد کن'; return; }
+    inputs.forEach((i) => { i.readOnly = true; i.blur(); });
+
+    let ok = false, errMsg = '';
     try {
       const res = await fetch(`${API}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, password, otp }),
+        body: JSON.stringify({ phone, password, otp: codeValue() }),
       });
       const data = await res.json();
-      if (!res.ok) { errorEl.textContent = data.error || 'خطایی پیش اومد'; return; }
-      await bootstrapApp();
+      ok = res.ok;
+      errMsg = data.error || 'کد اشتباهه یا منقضی شده';
+    } catch (e) {
+      errMsg = 'اتصال برقرار نشد';
+    }
+
+    if (!ok) {
+      errorEl.textContent = errMsg;
+      inputs.forEach((i) => i.classList.add('error'));
+      await wait(450);
+      inputs.forEach((i) => { i.classList.remove('error'); i.value = ''; i.readOnly = false; });
+      busy = false;
+      inputs[0].focus();
+      return;
+    }
+
+    card.classList.add('done');
+    if (!reduced) {
+      inputs.forEach((i) => i.classList.add('fly'));
+      await orbit();
+      await wait(250);
+      card.classList.add('verifying');
+      await collapse();
+    } else {
+      inputs.forEach((i) => { i.style.opacity = 0; });
+    }
+
+    ring.classList.add('show');
+    card.classList.add('show-secured');
+    await wait(reduced ? 0 : 650);
+    card.classList.remove('verifying');
+    card.classList.add('success');
+    swapText('با موفقیت تأیید شد', 'حسابت ساخته شد، داریم واردت می‌کنیم…');
+    await wait(700);
+    await bootstrapApp();
+  }
+
+  resendBtn.addEventListener('click', async () => {
+    resendBtn.disabled = true;
+    try {
+      const res = await fetch(`${API}/auth/request-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone }),
+      });
+      const data = await res.json();
+      if (!res.ok) errorEl.textContent = data.error || 'ارسال کد ناموفق بود';
     } catch (e) {
       errorEl.textContent = 'اتصال برقرار نشد';
     }
+    let s = 60;
+    resendBtn.textContent = `ارسال دوباره (${s})`;
+    const id = setInterval(() => {
+      s--;
+      if (s <= 0) { clearInterval(id); resendBtn.disabled = false; resendBtn.textContent = 'ارسال دوباره'; }
+      else resendBtn.textContent = `ارسال دوباره (${s})`;
+    }, 1000);
   });
+
+  layoutRow();
+  inputs[0].focus();
 }
 
 async function checkAuth() {
