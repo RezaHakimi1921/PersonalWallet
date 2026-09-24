@@ -1480,8 +1480,8 @@ async function updateInvestmentPrices() {
   }
 }
 
-// Every 6 hours
-cron.schedule('0 */6 * * *', updateInvestmentPrices);
+// Every hour from 8am to 11pm (no point polling overnight when nobody's looking)
+cron.schedule('0 8-23 * * *', updateInvestmentPrices);
 
 app.post('/investments/refresh-prices', requireAuth, async (req, res) => {
   if (!process.env.BRSAPI_KEY) return res.status(400).json({ error: 'BRSAPI_KEY not configured' });
