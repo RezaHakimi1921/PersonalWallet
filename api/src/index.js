@@ -609,8 +609,8 @@ app.post('/transactions/manual', requireAuth, async (req, res) => {
     const account = accountRes.rows[0];
 
     const newBalance = direction === 'income'
-      ? account.balance_rial + Number(amount_rial)
-      : account.balance_rial - Number(amount_rial);
+      ? Number(account.balance_rial) + Number(amount_rial)
+      : Number(account.balance_rial) - Number(amount_rial);
     await client.query('UPDATE accounts SET balance_rial = $1 WHERE id = $2', [newBalance, account_id]);
     checkLowBalance(account_id);
 
