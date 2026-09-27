@@ -1836,12 +1836,19 @@ function openInstallmentModal(item) {
   manualModal.innerHTML = `
     <div class="card">
       <strong>ویرایش قسط/وام</strong>
+      <div class="muted" style="margin-top:8px">عنوان</div>
       <input id="inst-title" placeholder="عنوان" value="${item.title}" />
+      <div class="muted" style="margin-top:8px">مبلغ هر قسط (ریال)</div>
       <input id="inst-amount" type="text" inputmode="numeric" placeholder="مبلغ هر قسط (ریال)" value="${toman(item.installment_amount_rial)}" />
+      <div class="grid2" style="margin-top:8px">
+        <div class="muted">تعداد کل اقساط</div>
+        <div class="muted">تعداد پرداخت‌شده</div>
+      </div>
       <div class="grid2">
         <input id="inst-total" type="text" inputmode="numeric" placeholder="تعداد کل اقساط" value="${item.total_count}" />
         <input id="inst-paid" type="text" inputmode="numeric" placeholder="تعداد پرداخت‌شده" value="${item.paid_count}" />
       </div>
+      <div class="muted" style="margin-top:8px">روز موعد در ماه (شمسی)</div>
       <input id="inst-day" type="text" inputmode="numeric" placeholder="روز موعد در ماه (شمسی)" value="${item.due_day_of_month}" />
       <button class="action" id="inst-save">ذخیره</button>
       <button class="action secondary" id="inst-cancel">انصراف</button>
