@@ -727,6 +727,10 @@ tabButtons.forEach((btn) => {
   btn.addEventListener('click', () => setActiveTab(btn.dataset.tab));
 });
 
+document.getElementById('btn-refresh').addEventListener('click', () => {
+  const activeTab = [...tabButtons].find((b) => b.classList.contains('active'))?.dataset.tab;
+  if (activeTab) render(activeTab);
+});
 document.getElementById('btn-more').addEventListener('click', () => { moreSheet.hidden = false; });
 document.getElementById('btn-more-close').addEventListener('click', () => { moreSheet.hidden = true; });
 moreSheet.addEventListener('click', (e) => { if (e.target === moreSheet) moreSheet.hidden = true; });
@@ -1049,8 +1053,8 @@ function wireCategorySuggestion(amountInputId, catSelectId, getDirection, histog
 }
 
 async function renderPending() {
-  const [txs, cats, accounts, debts, allTxs] = await Promise.all([
-    api('/transactions?status=pending'), api('/categories'), api('/accounts'), api('/debts'), api('/transactions'),
+  const [txs, cats, accounts, debts, allTxs, installments] = await Promise.all([
+    api('/transactions?status=pending'), api('/categories'), api('/accounts'), api('/debts'), api('/transactions'), api('/installments'),
   ]);
   if (txs.length === 0) {
     content.innerHTML = '<p class="muted">تراکنش در انتظاری وجود ندارد.</p>';
@@ -1058,7 +1062,7 @@ async function renderPending() {
   }
   const histogram = buildAmountCategoryHistogram(allTxs);
   content.innerHTML = txs.map((t) => txCard(t, cats, true, accounts)).join('');
-  txs.forEach((t) => wireTxCard(t, cats, accounts, debts, histogram));
+  txs.forEach((t) => wireTxCard(t, cats, accounts, debts, histogram, installments));
 }
 
 const TRANSFER_CATEGORY_NAME = 'انتقال وجه بین حساب';
@@ -1138,6 +1142,50 @@ async function maybeCreateLoanDebt(idSuffix, direction, amount_rial) {
       }),
     });
   }
+}
+
+const INSTALLMENT_CATEGORY_NAME = 'قسط';
+
+function installmentFieldHtml(idSuffix) {
+  return `<select id="installment-select-${idSuffix}" hidden></select>`;
+}
+
+function installmentOptionsHtml(installments) {
+  const active = installments.filter((i) => i.status === 'active');
+  return '<option value="">این هزینه برای کدوم قسطه؟</option>' + active
+    .map((i) => `<option value="${i.id}">${i.title} (قسط ${i.paid_count + 1} از ${i.total_count} — ${toman(i.installment_amount_rial)} ریال)</option>`)
+    .join('');
+}
+
+// Reacts to both the category select and the amount input: picking "قسط" shows a
+// dropdown of active installments, and if the typed amount exactly matches one of
+// them it's preselected automatically -- the same amount-match logic the SMS
+// webhook already uses to suggest an installment, now reachable from the UI too.
+function wireInstallmentField(catSelectId, idSuffix, cats, installments, amountInputId) {
+  const catSelect = document.getElementById(catSelectId);
+  const select = document.getElementById(`installment-select-${idSuffix}`);
+  const active = installments.filter((i) => i.status === 'active');
+  const update = () => {
+    const selected = cats.find((c) => String(c.id) === catSelect.value);
+    const show = !!(selected && selected.name === INSTALLMENT_CATEGORY_NAME);
+    select.hidden = !show;
+    if (!show) return;
+    const prev = select.value;
+    select.innerHTML = installmentOptionsHtml(installments);
+    const amount = numFromInput(amountInputId);
+    const match = amount && active.find((i) => Number(i.installment_amount_rial) === amount);
+    select.value = match ? String(match.id) : prev;
+  };
+  catSelect.addEventListener('change', update);
+  document.getElementById(amountInputId).addEventListener('input', update);
+  update();
+  return update;
+}
+
+async function maybeMarkInstallmentPaid(idSuffix) {
+  const select = document.getElementById(`installment-select-${idSuffix}`);
+  if (select.hidden || !select.value) return;
+  await api(`/installments/${select.value}/pay`, { method: 'POST' });
 }
 
 // A formal bank loan deposit: non-flow (not counted as income) and tracked as a
@@ -1333,7 +1381,7 @@ function wireTxFilters() {
 }
 
 async function openEditTxModal(t) {
-  const [accounts, cats, debts] = await Promise.all([api('/accounts'), api('/categories'), api('/debts')]);
+  const [accounts, cats, debts, installments] = await Promise.all([api('/accounts'), api('/categories'), api('/debts'), api('/installments')]);
   const renderCatOptions = (direction) => cats
     .filter((c) => c.direction === direction)
     .map((c) => `<option value="${c.id}" ${c.id === t.category_id ? 'selected' : ''}>${c.name}</option>`)
@@ -1355,6 +1403,7 @@ async function openEditTxModal(t) {
       ${loanPersonFieldHtml('e')}
       ${repayFieldHtml('e')}
       ${bankLoanFieldHtml('e')}
+      ${installmentFieldHtml('e')}
       <input id="e-note" placeholder="توضیح" value="${t.note || ''}" />
       <input id="e-tags" placeholder="تگ (با کاما جدا کن)" value="${t.tags || ''}" />
       <button class="action" id="e-save">ذخیره</button>
@@ -1366,10 +1415,12 @@ async function openEditTxModal(t) {
 
   const updateRepayE = wireRepayField('e-category', () => document.getElementById('e-direction').value, 'repay-debt-e', cats, debts);
   const updateLoanE = wireLoanField('e-category', 'e', cats, debts, () => document.getElementById('e-direction').value);
+  const updateInstallmentE = wireInstallmentField('e-category', 'e', cats, installments, 'e-amount');
   document.getElementById('e-direction').addEventListener('change', (e) => {
     document.getElementById('e-category').innerHTML = renderCatOptions(e.target.value);
     updateRepayE();
     updateLoanE();
+    updateInstallmentE();
   });
   wireBankLoanField('e-category', 'bank-loan-e', cats);
   document.getElementById('e-cancel').addEventListener('click', () => { manualModal.hidden = true; });
@@ -1378,6 +1429,7 @@ async function openEditTxModal(t) {
     await maybeCreateLoanDebt('e', document.getElementById('e-direction').value, numFromInput('e-amount'));
     await maybeRepayDebt('repay-debt-e', numFromInput('e-amount'));
     await maybeCreateLoanInstallment('e', accountName, numFromInput('e-amount'));
+    await maybeMarkInstallmentPaid('e');
     await api(`/transactions/${t.id}/edit`, {
       method: 'PUT',
       body: JSON.stringify({
@@ -1415,6 +1467,7 @@ function txCard(t, cats, editable, accounts) {
         ${loanPersonFieldHtml(t.id)}
         ${repayFieldHtml(t.id)}
         ${bankLoanFieldHtml(t.id)}
+        ${installmentFieldHtml(t.id)}
         <input id="note-${t.id}" placeholder="توضیح (اختیاری)" />
         <input id="tags-${t.id}" placeholder="تگ (مثلا سفر، کار — با کاما جدا کن)" />
         <div class="row" style="gap:8px">
@@ -1426,7 +1479,7 @@ function txCard(t, cats, editable, accounts) {
   `;
 }
 
-function wireTxCard(t, cats, accounts, debts, histogram) {
+function wireTxCard(t, cats, accounts, debts, histogram, installments) {
   const btn = document.getElementById(`confirm-${t.id}`);
   if (!btn) return;
   wireThousandsInput(`amount-${t.id}`);
@@ -1434,6 +1487,7 @@ function wireTxCard(t, cats, accounts, debts, histogram) {
   wireLoanField(`cat-${t.id}`, t.id, cats, debts, () => t.direction);
   wireRepayField(`cat-${t.id}`, () => t.direction, `repay-debt-${t.id}`, cats, debts || []);
   wireBankLoanField(`cat-${t.id}`, `bank-loan-${t.id}`, cats);
+  wireInstallmentField(`cat-${t.id}`, t.id, cats, installments || [], `amount-${t.id}`);
   if (histogram) wireCategorySuggestion(`amount-${t.id}`, `cat-${t.id}`, () => t.direction, histogram)();
   onClickLocked(btn, async () => {
     const category_id = document.getElementById(`cat-${t.id}`).value || null;
@@ -1455,6 +1509,7 @@ function wireTxCard(t, cats, accounts, debts, histogram) {
     await maybeCreateLoanDebt(t.id, t.direction, amount_rial);
     await maybeRepayDebt(`repay-debt-${t.id}`, amount_rial);
     await maybeCreateLoanInstallment(t.id, account?.display_name || '', amount_rial);
+    await maybeMarkInstallmentPaid(t.id);
     await api(`/transactions/${t.id}/confirm`, { method: 'POST', body: JSON.stringify({ category_id, note, tags }) });
     document.getElementById(`tx-${t.id}`).remove();
   });
@@ -2701,7 +2756,7 @@ const fab = document.getElementById('fab');
 const manualModal = document.getElementById('manual-modal');
 
 async function openManualModal() {
-  const [accounts, cats, debts, allTxs] = await Promise.all([api('/accounts'), api('/categories'), api('/debts'), api('/transactions')]);
+  const [accounts, cats, debts, allTxs, installments] = await Promise.all([api('/accounts'), api('/categories'), api('/debts'), api('/transactions'), api('/installments')]);
   const histogram = buildAmountCategoryHistogram(allTxs);
   const accountOptions = accounts.map((a) => `<option value="${a.id}">${a.display_name}</option>`).join('');
   const renderCatOptions = (direction) => cats
@@ -2723,6 +2778,7 @@ async function openManualModal() {
       ${loanPersonFieldHtml('m')}
       ${repayFieldHtml('m')}
       ${bankLoanFieldHtml('m')}
+      ${installmentFieldHtml('m')}
       <input id="m-note" placeholder="توضیح (اختیاری)" />
       <input id="m-tags" placeholder="تگ (اختیاری، با کاما جدا کن)" />
       <button class="action" id="m-save">ثبت</button>
@@ -2735,11 +2791,13 @@ async function openManualModal() {
   const updateRepayM = wireRepayField('m-category', () => document.getElementById('m-direction').value, 'repay-debt-m', cats, debts);
   const applySuggestionM = wireCategorySuggestion('m-amount', 'm-category', () => document.getElementById('m-direction').value, histogram);
   const updateLoanM = wireLoanField('m-category', 'm', cats, debts, () => document.getElementById('m-direction').value);
+  const updateInstallmentM = wireInstallmentField('m-category', 'm', cats, installments, 'm-amount');
   document.getElementById('m-direction').addEventListener('change', (e) => {
     document.getElementById('m-category').innerHTML = renderCatOptions(e.target.value);
     updateRepayM();
     applySuggestionM();
     updateLoanM();
+    updateInstallmentM();
   });
   wireTransferField('m-category', 'other-account-m', cats);
   wireBankLoanField('m-category', 'bank-loan-m', cats);
@@ -2761,6 +2819,7 @@ async function openManualModal() {
     await maybeCreateLoanDebt('m', direction, amountToman);
     await maybeRepayDebt('repay-debt-m', amountToman);
     await maybeCreateLoanInstallment('m', accountName, amountToman);
+    await maybeMarkInstallmentPaid('m');
     await api('/transactions/manual', {
       method: 'POST',
       body: JSON.stringify({ account_id, amount_rial: amountToman, direction, category_id, note, tags }),
