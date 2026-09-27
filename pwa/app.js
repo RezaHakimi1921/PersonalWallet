@@ -293,13 +293,21 @@ async function initGoldCoin() {
   fill.position.set(-4, -2, 2);
   scene.add(fill);
 
+  // Time-based so the spin speed is the same on 60Hz and 120Hz screens.
   coinTick = () => {
-    coinGroup.rotation.y += 0.014;
-    coinGroup.rotation.x = Math.sin(Date.now() / 2200) * 0.12;
+    const now = performance.now();
+    coinGroup.rotation.y = (now / 1000) * 0.84;
+    coinGroup.rotation.x = Math.sin(now / 2200) * 0.12;
     renderer.render(scene, camera);
     coinAnimFrame = requestAnimationFrame(coinTick);
   };
-  coinTick();
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    coinGroup.rotation.set(0.12, 0.5, 0);
+    renderer.render(scene, camera);
+    coinTick = () => {};
+  } else {
+    coinTick();
+  }
 }
 
 // Renders the "یا با گوگل وارد شو" divider + button into #google-btn-slot, if the
@@ -784,6 +792,7 @@ const THEME_KEY = 'pw-theme';
 const btnTheme = document.getElementById('btn-theme');
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
+  document.querySelector('meta[name="theme-color"]').setAttribute('content', theme === 'light' ? '#f8fafc' : '#020617');
   btnTheme.textContent = theme === 'light' ? '☀️' : '🌙';
   btnTheme.title = theme === 'light' ? 'حالت تاریک' : 'حالت روشن';
 }
