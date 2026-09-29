@@ -10,6 +10,7 @@ const { parseSms } = require('./parsers');
 const { sendNtfy } = require('./ntfy');
 const { ASSET_CATALOG, CATALOG_BY_SYMBOL, LEGACY_TYPE_TO_SYMBOL, getMarketPrices, unitPriceRial } = require('./assets');
 const { DEFAULT_CATEGORIES } = require('./defaults');
+const { BANKS, BANK_BY_CODE, detectBankFromCard } = require('./banks');
 
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || '';
 const AUTH_SECRET = process.env.AUTH_SECRET || 'dev-secret-change-me';
@@ -130,6 +131,14 @@ async function migrateAuth() {
     `SELECT u.id FROM users u WHERE NOT EXISTS (SELECT 1 FROM categories c WHERE c.user_id = u.id)`
   );
   for (const u of emptyUsers.rows) await seedDefaultCategories(pool, u.id);
+
+  // Which bank an account belongs to (picks the SMS parser and logo). bank_code stays the
+  // account's unique webhook key; the three original accounts used the bank name as that key.
+  await pool.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS bank TEXT`);
+  await pool.query(
+    `UPDATE accounts SET bank = bank_code WHERE bank IS NULL AND bank_code = ANY($1)`,
+    [BANKS.map((b) => b.code)]
+  );
 
   // Per-asset market symbol (half coin, euro, ...) instead of one price per coarse asset_type.
   await pool.query(`ALTER TABLE investments ADD COLUMN IF NOT EXISTS symbol TEXT`);
@@ -417,7 +426,7 @@ app.post('/auth/logout', (req, res) => {
 });
 
 app.get('/auth/me', requireAuth, async (req, res) => {
-  const result = await pool.query('SELECT id, phone, email, api_key, ntfy_topic FROM users WHERE id = $1', [req.userId]);
+  const result = await pool.query('SELECT id, phone, email, username, api_key, ntfy_topic FROM users WHERE id = $1', [req.userId]);
   if (result.rows.length === 0) return res.status(401).json({ error: 'unauthorized' });
   res.json(result.rows[0]);
 });
@@ -452,16 +461,31 @@ async function checkLowBalance(accountId) {
 
 // ---------- Webhook: incoming bank SMS. Not cookie-authenticated (an external iOS
 // Shortcut posts here) -- identified instead by the per-user api_key in the URL. ----------
-app.post('/webhook/sms/:apiKey', async (req, res) => {
+// Two URL shapes: the per-account one (/webhook/sms/:apiKey/:accountCode, body just
+// needs the SMS text -- what the setup guide hands out for iPhone and Android), and
+// the original one where the body names the account in a `bank` field.
+app.post('/webhook/sms/:apiKey/:accountCode', (req, res) => handleSmsWebhook(req, res, req.params.accountCode));
+app.post('/webhook/sms/:apiKey', (req, res) => handleSmsWebhook(req, res, null));
+
+const ONE_TIME_PASSWORD = /رمز\s*(پویا|یکبار|دوم|اینترنتی)|کد\s*(تایید|تأیید|یکبار|فعال‌?سازی|امنیتی)|رمز\s*عبور|\bOTP\b|password|verification/i;
+function looksLikeOneTimePassword(text) {
+  return ONE_TIME_PASSWORD.test(text);
+}
+
+async function handleSmsWebhook(req, res, accountCodeFromPath) {
   const user = await resolveUserByApiKey(req.params.apiKey);
   if (!user) return res.status(401).json({ error: 'invalid api key' });
 
   // iOS Shortcuts auto-capitalizes single-word field names (e.g. "Text"), so match keys case-insensitively.
   const body = {};
   for (const [k, v] of Object.entries(req.body || {})) body[k.toLowerCase()] = v;
-  const bank = body.bank?.toLowerCase();
-  const text = body.text;
+  const bank = (accountCodeFromPath || body.bank)?.toLowerCase();
+  const text = body.text || body.message;
   if (!bank || !text) return res.status(400).json({ error: 'bank and text are required' });
+
+  // Banks send one-time/dynamic passwords from the same sender as transaction SMS, so a
+  // forwarding rule catches them too. Drop them unseen: never stored, never pushed to ntfy.
+  if (looksLikeOneTimePassword(String(text))) return res.json({ ok: true, ignored: 'one-time password' });
 
   const client = await pool.connect();
   try {
@@ -487,7 +511,7 @@ app.post('/webhook/sms/:apiKey', async (req, res) => {
       return res.json({ ok: true, parsed: true, transaction_id: existing.id, new_balance_rial: existing.balance_after_rial, idempotent_replay: true });
     }
 
-    const parsed = parseSms(bank, text);
+    const parsed = parseSms(account.bank || account.bank_code, text);
 
     if (!parsed) {
       // Not a transaction SMS (or couldn't be parsed) -- alert immediately, and also
@@ -590,7 +614,7 @@ app.post('/webhook/sms/:apiKey', async (req, res) => {
   } finally {
     client.release();
   }
-});
+}
 
 // ---------- Transactions ----------
 app.get('/transactions', requireAuth, async (req, res) => {
@@ -845,14 +869,32 @@ app.get('/accounts', requireAuth, async (req, res) => {
   res.json(result.rows);
 });
 
+app.get('/banks', (req, res) => {
+  res.json(BANKS.map((b) => ({
+    code: b.code, name: b.name, color: b.color, prefixes: b.prefixes,
+    logo_url: `/banks/${b.logo}`, sms_tested: b.sms === 'tested',
+  })));
+});
+
+// `bank` is a catalog code, 'cash' for cash, or empty for anything else. When omitted
+// it's inferred from the card number.
+function resolveBank(bank, cardNumber) {
+  if (bank === 'cash') return 'cash';
+  if (bank && BANK_BY_CODE[bank]) return bank;
+  return detectBankFromCard(cardNumber);
+}
+
 app.post('/accounts', requireAuth, async (req, res) => {
   const { display_name, balance_rial, card_number, account_number, iban, cvv2, expiry, low_balance_threshold_rial } = req.body || {};
-  if (!display_name) return res.status(400).json({ error: 'display_name is required' });
-  const bank_code = `manual-${Date.now()}`;
+  const bank = resolveBank(req.body?.bank, card_number);
+  const name = display_name || BANK_BY_CODE[bank]?.name || (bank === 'cash' ? 'پول نقد' : null);
+  if (!name) return res.status(400).json({ error: 'display_name is required' });
+  // Unique per account: it's the key in the account's own SMS webhook URL.
+  const bank_code = `${bank || 'acc'}-${crypto.randomBytes(3).toString('hex')}`;
   const result = await pool.query(
-    `INSERT INTO accounts (bank_code, display_name, balance_rial, card_number, account_number, iban, cvv2, expiry, low_balance_threshold_rial, user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-    [bank_code, display_name, balance_rial || 0, card_number || null, account_number || null, iban || null, cvv2 || null, expiry || null, low_balance_threshold_rial || null, req.userId]
+    `INSERT INTO accounts (bank_code, bank, display_name, balance_rial, card_number, account_number, iban, cvv2, expiry, low_balance_threshold_rial, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+    [bank_code, bank, name, balance_rial || 0, card_number || null, account_number || null, iban || null, cvv2 || null, expiry || null, low_balance_threshold_rial || null, req.userId]
   );
   res.json(result.rows[0]);
 });
@@ -880,9 +922,11 @@ app.put('/accounts/:id', requireAuth, async (req, res) => {
        iban = COALESCE($5, iban),
        cvv2 = COALESCE($6, cvv2),
        expiry = COALESCE($7, expiry),
-       low_balance_threshold_rial = COALESCE($8, low_balance_threshold_rial)
+       low_balance_threshold_rial = COALESCE($8, low_balance_threshold_rial),
+       bank = COALESCE($11, bank)
      WHERE id = $9 AND user_id = $10 RETURNING *`,
-    [display_name ?? null, balance_rial ?? null, card_number ?? null, account_number ?? null, iban ?? null, cvv2 ?? null, expiry ?? null, low_balance_threshold_rial ?? null, id, req.userId]
+    [display_name ?? null, balance_rial ?? null, card_number ?? null, account_number ?? null, iban ?? null, cvv2 ?? null, expiry ?? null, low_balance_threshold_rial ?? null, id, req.userId,
+      req.body?.bank ? resolveBank(req.body.bank, null) : null]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
   if (balance_rial != null || low_balance_threshold_rial != null) await checkLowBalance(id);

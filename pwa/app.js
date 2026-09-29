@@ -692,10 +692,10 @@ function openAccountSettingsModal() {
   manualModal.innerHTML = `
     <div class="card">
       <strong>حساب کاربری</strong>
-      <div class="muted" style="margin-top:8px;font-size:.8rem">شماره موبایل</div>
-      <div class="font-num">${currentUser.phone}</div>
+      <div class="muted" style="margin-top:8px;font-size:.8rem">${currentUser.phone ? 'شماره موبایل' : currentUser.email ? 'ایمیل' : 'نام کاربری'}</div>
+      <div class="font-num">${currentUser.phone || currentUser.email || currentUser.username || ''}</div>
 
-      <div class="muted" style="margin-top:12px;font-size:.8rem">آدرس وب‌هوک پیامک بانکی (برای iOS Shortcuts)</div>
+      <div class="muted" style="margin-top:12px;font-size:.8rem">آدرس کلی وب‌هوک پیامک (برای اتوماسیون‌های قدیمی که فیلد bank دارن). برای حساب‌های جدید، از «حساب‌ها ← 📲 اتصال پیامک» آدرس اختصاصی هر حساب رو بگیر.</div>
       <textarea readonly class="sms-text" style="min-height:50px;font-size:.7rem" id="acc-webhook-url">${webhookUrl}</textarea>
       <button class="action secondary" id="acc-copy-webhook">کپی آدرس</button>
 
@@ -964,8 +964,8 @@ async function renderOverview() {
       </div>
       <div class="accounts-grid" style="margin-top:10px">
         ${accounts.map((a) => `
-          <div class="mini-bank-card" style="background:${bankTheme(a.bank_code)}">
-            ${bankLogoHtml(a.bank_code, 32) || '<div class="mini-bank-icon"></div>'}
+          <div class="mini-bank-card" style="background:${bankTheme(a)}">
+            ${bankLogoHtml(a, 32) || '<div class="mini-bank-icon"></div>'}
             <div style="font-size:.85rem;font-weight:600">${a.display_name}</div>
             ${cardInfoHtml(a)}
             <div class="privacy-target font-num" style="margin-top:8px;font-weight:700">${toman(a.balance_rial)} ریال</div>
@@ -1558,18 +1558,40 @@ const BANK_THEMES = {
   blu: 'linear-gradient(135deg, #0ea5a6, #0a4f50)',
   pasargad: 'linear-gradient(135deg, #00573f, #7a5c00)',
 };
-function bankTheme(bankCode) {
-  return BANK_THEMES[bankCode] || 'linear-gradient(135deg, #1e293b, #0f172a)';
+// The bank catalog (name, logo, color, card prefixes) comes from the backend's /banks.
+let banksCatalog = [];
+async function loadBanks() {
+  if (banksCatalog.length) return banksCatalog;
+  try { banksCatalog = await (await fetch(`${API}/banks`)).json(); } catch (e) { banksCatalog = []; }
+  return banksCatalog;
+}
+function bankOf(account) {
+  const key = account.bank || account.bank_code;
+  return banksCatalog.find((b) => b.code === key) || null;
+}
+function detectBankFromCard(cardNumber) {
+  const digits = String(cardNumber || '').replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/\D/g, '');
+  let best = null;
+  banksCatalog.forEach((b) => b.prefixes.forEach((p) => {
+    if (digits.length >= p.length && digits.startsWith(p) && (!best || p.length > best.len)) best = { bank: b, len: p.length };
+  }));
+  return best?.bank || null;
 }
 
-const BANK_LOGOS = {
-  blu: 'https://www.google.com/s2/favicons?sz=128&domain=blubank.com',
-  pasargad: 'https://www.google.com/s2/favicons?sz=128&domain=bpi.ir',
-};
-function bankLogoHtml(bankCode, size) {
-  const url = BANK_LOGOS[bankCode];
-  if (!url) return '';
-  return `<img src="${url}" alt="" style="width:${size}px;height:${size}px;border-radius:8px;background:white;padding:3px;object-fit:contain" onerror="this.remove()" />`;
+function bankTheme(account) {
+  const key = account.bank || account.bank_code;
+  if (BANK_THEMES[key]) return BANK_THEMES[key];
+  const bank = bankOf(account);
+  return bank ? `linear-gradient(135deg, ${bank.color}, #0f172a 90%)` : 'linear-gradient(135deg, #1e293b, #0f172a)';
+}
+
+function bankLogoHtml(account, size) {
+  if (account.bank === 'cash') {
+    return `<span style="width:${size}px;height:${size}px;border-radius:8px;background:white;display:inline-grid;place-items:center;font-size:${Math.round(size * 0.6)}px">💵</span>`;
+  }
+  const bank = bankOf(account);
+  if (!bank) return '';
+  return `<img src="${bank.logo_url}" alt="" loading="lazy" style="width:${size}px;height:${size}px;border-radius:8px;background:white;padding:3px;object-fit:contain" onerror="this.remove()" />`;
 }
 
 function copyableField(label, value, displayValue) {
@@ -1623,7 +1645,7 @@ function wireExpiryInput(id) {
 }
 
 async function renderAccounts() {
-  const accounts = await api('/accounts');
+  const [accounts] = await Promise.all([api('/accounts'), loadBanks()]);
   const total = accounts.reduce((s, a) => s + Number(a.balance_rial), 0);
   content.innerHTML = `
     <div class="card row">
@@ -1632,9 +1654,9 @@ async function renderAccounts() {
     </div>
     <button class="action" id="acc-new">+ حساب جدید</button>
   ` + accounts.map((a) => `
-    <div class="bank-card" style="margin:10px 0;background:${bankTheme(a.bank_code)}">
+    <div class="bank-card" style="margin:10px 0;background:${bankTheme(a)}">
       <div class="row">
-        <div class="row" style="width:auto;gap:8px">${bankLogoHtml(a.bank_code, 28)}<span>${a.display_name}</span></div>
+        <div class="row" style="width:auto;gap:8px">${bankLogoHtml(a, 28)}<span>${a.display_name}</span></div>
         <div class="row" style="width:auto;gap:6px">
           <button data-balance-log="${a.id}" style="background:rgba(255,255,255,.15);border:none;color:white;border-radius:8px;padding:4px 8px;font-family:inherit;font-size:.7rem;cursor:pointer">🕓 تاریخچه</button>
           <button data-edit-acc="${a.id}" style="background:rgba(255,255,255,.15);border:none;color:white;border-radius:8px;padding:4px 8px;font-family:inherit;font-size:.7rem;cursor:pointer">✎ ویرایش</button>
@@ -1650,13 +1672,17 @@ async function renderAccounts() {
         <button class="action secondary" data-recon="${a.id}" style="width:auto;background:rgba(255,255,255,.15);border:none;color:white">بررسی</button>
       </div>
       <div id="recon-result-${a.id}" class="muted" style="font-size:.7rem;margin-top:4px"></div>
+      ${a.bank !== 'cash' ? `<button data-sms-setup="${a.id}" style="margin-top:10px;width:100%;background:rgba(255,255,255,.15);border:none;color:white;border-radius:10px;padding:8px;font-family:inherit;font-size:.75rem;cursor:pointer">📲 اتصال پیامک این حساب (آیفون / اندروید)</button>` : ''}
     </div>
   `).join('');
 
   wireCopyFields();
   accounts.forEach((a) => wireThousandsInput(`recon-${a.id}`));
 
-  document.getElementById('acc-new').addEventListener('click', () => openAccountModal(null));
+  document.getElementById('acc-new').addEventListener('click', () => openBankPicker());
+  document.querySelectorAll('[data-sms-setup]').forEach((b) => {
+    b.addEventListener('click', () => openSmsSetupModal(accounts.find((a) => a.id === Number(b.dataset.smsSetup))));
+  });
   document.querySelectorAll('[data-edit-acc]').forEach((b) => {
     b.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1686,49 +1712,250 @@ async function renderAccounts() {
   });
 }
 
-function openAccountModal(account) {
-  const isNew = !account;
+// Step 1 of adding an account: pick the bank (or cash / other).
+async function openBankPicker() {
+  await loadBanks();
+  const tile = (value, logo, name) => `
+    <button class="bank-tile" data-pick-bank="${value}" data-name="${name}">
+      ${logo}
+      <span>${name}</span>
+    </button>`;
   manualModal.innerHTML = `
     <div class="card">
-      <strong>${isNew ? 'حساب بانکی جدید' : 'ویرایش حساب'}</strong>
-      <input id="acc-name" placeholder="نام بانک/حساب" value="${account?.display_name || ''}" />
-      <input id="acc-balance" type="text" inputmode="numeric" placeholder="موجودی (ریال)" value="${account ? toman(account.balance_rial) : ''}" />
-      <input id="acc-card" placeholder="شماره کارت (اختیاری)" value="${account?.card_number || ''}" />
-      <input id="acc-account-number" placeholder="شماره حساب (اختیاری)" value="${account?.account_number || ''}" />
-      <input id="acc-iban" placeholder="شبا بدون IR (اختیاری)" value="${account?.iban || ''}" />
-      <div class="grid2">
-        <input id="acc-cvv2" placeholder="CVV2 (اختیاری)" value="${account?.cvv2 || ''}" />
-        <input id="acc-expiry" placeholder="انقضا MM/YY (اختیاری)" inputmode="numeric" value="${account?.expiry || ''}" />
+      <strong>حساب جدید — کدوم بانک؟</strong>
+      <input id="bank-search" placeholder="جستجوی بانک..." autocomplete="off" />
+      <div class="bank-grid" id="bank-grid">
+        ${banksCatalog.map((b) => tile(b.code, `<img src="${b.logo_url}" alt="" loading="lazy" />`, b.name)).join('')}
+        ${tile('cash', '<span class="bank-tile-emoji">💵</span>', 'پول نقد')}
+        ${tile('other', '<span class="bank-tile-emoji">🏦</span>', 'سایر')}
       </div>
-      <input id="acc-threshold" type="text" inputmode="numeric" placeholder="هشدار وقتی موجودی کمتر از این شد (ریال، اختیاری)" value="${account?.low_balance_threshold_rial ? toman(account.low_balance_threshold_rial) : ''}" />
-      <button class="action" id="acc-save">${isNew ? 'افزودن' : 'ذخیره'}</button>
-      <button class="action secondary" id="acc-cancel">انصراف</button>
+      <button class="action secondary" id="bank-cancel">انصراف</button>
+    </div>
+  `;
+  manualModal.hidden = false;
+  document.getElementById('bank-cancel').addEventListener('click', () => { manualModal.hidden = true; });
+  document.getElementById('bank-search').addEventListener('input', (e) => {
+    const q = e.target.value.trim();
+    document.querySelectorAll('[data-pick-bank]').forEach((t) => { t.hidden = q && !t.dataset.name.includes(q); });
+  });
+  document.querySelectorAll('[data-pick-bank]').forEach((t) => {
+    t.addEventListener('click', () => openAccountModal(null, t.dataset.pickBank));
+  });
+}
+
+// Step 2 (or editing an existing account): the account's details.
+function openAccountModal(account, presetBank) {
+  const isNew = !account;
+  let bank = isNew ? presetBank : (account.bank || null);
+  const bankInfo = () => banksCatalog.find((b) => b.code === bank) || null;
+  const isCash = bank === 'cash';
+  const defaultName = isNew ? (bankInfo()?.name || (isCash ? 'پول نقد' : '')) : account.display_name;
+  const field = (label, html) => `<div class="muted" style="margin-top:8px">${label}</div>${html}`;
+  manualModal.innerHTML = `
+    <div class="card">
+      <div class="row" style="justify-content:flex-start;gap:10px">
+        <span id="acc-bank-logo">${bankLogoHtml({ bank }, 36)}</span>
+        <strong>${isNew ? 'حساب جدید' : 'ویرایش حساب'}</strong>
+      </div>
+      ${isNew ? '' : field('بانک', `<select id="acc-bank">
+        <option value="">بدون بانک / سایر</option>
+        <option value="cash" ${bank === 'cash' ? 'selected' : ''}>پول نقد</option>
+        ${banksCatalog.map((b) => `<option value="${b.code}" ${b.code === bank ? 'selected' : ''}>${b.name}</option>`).join('')}
+      </select>`)}
+      ${field('نام حساب', `<input id="acc-name" placeholder="مثلا «ملت حقوق»" value="${defaultName}" />`)}
+      ${field('موجودی فعلی (ریال)', `<input id="acc-balance" type="text" inputmode="numeric" placeholder="0" value="${account ? toman(account.balance_rial) : ''}" />`)}
+      ${isCash ? '' : `
+        ${field('شماره کارت (اختیاری)', `<input id="acc-card" inputmode="numeric" dir="ltr" placeholder="6104 33.. .... ...." value="${account?.card_number || ''}" />`)}
+        <div class="muted" id="acc-card-hint" style="font-size:.75rem;margin-top:4px"></div>
+        ${field('شماره حساب (اختیاری)', `<input id="acc-account-number" value="${account?.account_number || ''}" />`)}
+        ${field('شبا بدون IR (اختیاری)', `<input id="acc-iban" dir="ltr" value="${account?.iban || ''}" />`)}
+        <div class="grid2" style="margin-top:8px">
+          <div class="muted">CVV2 (اختیاری)</div>
+          <div class="muted">انقضا MM/YY (اختیاری)</div>
+        </div>
+        <div class="grid2">
+          <input id="acc-cvv2" value="${account?.cvv2 || ''}" />
+          <input id="acc-expiry" inputmode="numeric" value="${account?.expiry || ''}" />
+        </div>
+      `}
+      ${field('هشدار وقتی موجودی کمتر از این شد (ریال، اختیاری)', `<input id="acc-threshold" type="text" inputmode="numeric" value="${account?.low_balance_threshold_rial ? toman(account.low_balance_threshold_rial) : ''}" />`)}
+      <div id="acc-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
+      <button class="action" id="acc-save">${isNew ? 'افزودن حساب' : 'ذخیره'}</button>
+      <button class="action secondary" id="acc-cancel">${isNew ? 'برگشت به انتخاب بانک' : 'انصراف'}</button>
     </div>
   `;
   manualModal.hidden = false;
   wireThousandsInput('acc-balance');
   wireThousandsInput('acc-threshold');
-  wireExpiryInput('acc-expiry');
+  if (!isCash) wireExpiryInput('acc-expiry');
 
-  document.getElementById('acc-cancel').addEventListener('click', () => { manualModal.hidden = true; });
+  const setBank = (code) => {
+    bank = code;
+    document.getElementById('acc-bank-logo').innerHTML = bankLogoHtml({ bank }, 36);
+  };
+  document.getElementById('acc-bank')?.addEventListener('change', (e) => setBank(e.target.value || null));
+  // Recognise the bank from the card number; offer it rather than silently overriding a choice.
+  document.getElementById('acc-card')?.addEventListener('input', (e) => {
+    const detected = detectBankFromCard(e.target.value);
+    const hint = document.getElementById('acc-card-hint');
+    if (!detected || detected.code === bank) { hint.textContent = detected ? `✓ کارت ${detected.name}` : ''; return; }
+    hint.innerHTML = `این کارت مال <strong>${detected.name}</strong>ه. <button class="secondary" id="acc-use-detected" style="width:auto;padding:2px 8px;border-radius:8px;font-size:.75rem">همین رو بذار</button>`;
+    document.getElementById('acc-use-detected').addEventListener('click', () => {
+      setBank(detected.code);
+      const nameInput = document.getElementById('acc-name');
+      if (!nameInput.value.trim() || banksCatalog.some((b) => b.name === nameInput.value.trim())) nameInput.value = detected.name;
+      const select = document.getElementById('acc-bank');
+      if (select) select.value = detected.code;
+      hint.textContent = `✓ کارت ${detected.name}`;
+    });
+  });
+
+  document.getElementById('acc-cancel').addEventListener('click', () => {
+    if (isNew) openBankPicker(); else manualModal.hidden = true;
+  });
   onClickLocked(document.getElementById('acc-save'), async () => {
-    const display_name = document.getElementById('acc-name').value;
-    if (!display_name) return;
+    const display_name = document.getElementById('acc-name').value.trim();
+    if (!display_name) { document.getElementById('acc-error').textContent = 'اسم حساب رو وارد کن'; return; }
+    const value = (id) => document.getElementById(id)?.value || null;
     const body = {
       display_name,
+      bank: bank && bank !== 'other' ? bank : null,
       balance_rial: numFromInput('acc-balance'),
-      card_number: document.getElementById('acc-card').value || null,
-      account_number: document.getElementById('acc-account-number').value || null,
-      iban: document.getElementById('acc-iban').value || null,
-      cvv2: document.getElementById('acc-cvv2').value || null,
-      expiry: document.getElementById('acc-expiry').value || null,
+      card_number: value('acc-card'),
+      account_number: value('acc-account-number'),
+      iban: value('acc-iban'),
+      cvv2: value('acc-cvv2'),
+      expiry: value('acc-expiry'),
       low_balance_threshold_rial: numFromInput('acc-threshold') ? numFromInput('acc-threshold') : null,
     };
     if (isNew) {
-      await api('/accounts', { method: 'POST', body: JSON.stringify(body) });
+      const created = await api('/accounts', { method: 'POST', body: JSON.stringify(body) });
+      renderAccounts();
+      if (created.bank && created.bank !== 'cash') { openSmsSetupModal(created, { justCreated: true }); return; }
     } else {
       await api(`/accounts/${account.id}`, { method: 'PUT', body: JSON.stringify(body) });
     }
+    manualModal.hidden = true;
+    renderAccounts();
+  });
+}
+
+// SMS samples without a «مانده», so a test only moves the balance by the test amount.
+function testSmsFor(account) {
+  const key = account.bank || account.bank_code;
+  if (key === 'resalat' || key === 'pasargad') return 'پیامک آزمایشی\n-10,000';
+  if (key === 'blu') return 'بلو\nپیامک آزمایشی: 10,000 ریال از حساب شما پرید.';
+  return 'پیامک آزمایشی\nبرداشت: 10,000 ریال';
+}
+
+function detectPhonePlatform() {
+  const ua = navigator.userAgent;
+  if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'ios';
+  if (/Android/.test(ua)) return 'android';
+  return 'ios';
+}
+
+// Step 3: how to forward this account's bank SMS to the app, per phone platform.
+function openSmsSetupModal(account, { justCreated = false } = {}) {
+  const bank = bankOf(account);
+  const webhookUrl = `${location.origin}/api/webhook/sms/${currentUser.api_key}/${account.bank_code}`;
+  const androidTemplate = '{"text":"%text%","from":"%from%"}';
+  const androidFilter = '(?s)^(?!.*(رمز|کد))';
+  const copyBox = (id, value) => `
+    <div class="copy-box">
+      <code id="${id}" dir="ltr">${value}</code>
+      <button class="secondary copy-btn" data-copy="${id}">کپی</button>
+    </div>`;
+  manualModal.innerHTML = `
+    <div class="card sms-setup">
+      <div class="row" style="justify-content:flex-start;gap:10px">
+        ${bankLogoHtml(account, 36)}
+        <div>
+          <strong>${justCreated ? 'حساب ساخته شد ✓ — حالا پیامک‌ها رو وصل کن' : `اتصال پیامک ${account.display_name}`}</strong>
+          <div class="muted" style="font-size:.75rem">هر پیامک این بانک خودکار ثبت می‌شه و توی «در انتظار» میاد.</div>
+        </div>
+      </div>
+      <div class="sms-status ${bank?.sms_tested ? 'ok' : ''}">
+        ${bank?.sms_tested
+          ? '✓ فرمت پیامک‌های این بانک رو دقیق می‌شناسیم.'
+          : 'پیامک‌های این بانک با تشخیص خودکار خونده می‌شه. اگه یکی تشخیص داده نشد، توی «تحلیل ← کیفیت داده» میاد؛ یه نمونه‌اش رو بفرست تا دقیقش کنیم.'}
+      </div>
+
+      <div class="muted" style="margin-top:12px">آدرس اختصاصی این حساب</div>
+      ${copyBox('sms-url', webhookUrl)}
+
+      <div class="seg" role="tablist">
+        <button role="tab" data-platform="ios">آیفون</button>
+        <button role="tab" data-platform="android">اندروید</button>
+      </div>
+
+      <ol class="steps" data-steps="ios">
+        <li>اپ <b>Shortcuts</b> (میان‌برها) رو باز کن و برو تب <b>Automation</b>.</li>
+        <li><b>+</b> بزن و <b>Message</b> رو انتخاب کن.</li>
+        <li>توی <b>Sender</b>، فرستنده‌ی پیامک‌های ${bank?.name || 'بانک'} رو انتخاب کن — دقیقاً همون شماره یا اسمی که توی پیام‌ها می‌بینی.</li>
+        <li><b>Run Immediately</b> رو انتخاب کن و <b>Notify When Run</b> رو خاموش کن، بعد <b>Next</b>.</li>
+        <li><b>New Blank Automation</b> ← <b>Add Action</b> ← <b>Get Contents of URL</b>.</li>
+        <li>توی قسمت URL، آدرس بالا رو Paste کن.</li>
+        <li>روی فلش کنار اکشن بزن: <b>Method</b> رو <b>POST</b> کن و <b>Request Body</b> رو <b>JSON</b>.</li>
+        <li><b>Add new field</b> ← <b>Text</b>. کلید (Key) رو بنویس <code dir="ltr">text</code> و برای مقدار (Value)، متغیر <b>Shortcut Input</b> رو بذار؛ روش بزن و <b>Content</b> رو انتخاب کن.</li>
+        <li><b>Done</b>. از این به بعد هر پیامک این بانک خودکار فرستاده می‌شه.</li>
+      </ol>
+
+      <ol class="steps" data-steps="android" hidden>
+        <li>اپ رایگان و متن‌باز <b>SMS to URL Forwarder</b> رو از <b>F-Droid</b> یا صفحه‌ی Releases گیت‌هابش نصب کن. توی گوگل‌پلی نیست و هشدار Play Protect براش طبیعیه (Install anyway).</li>
+        <li>بازش کن و اجازه‌ی دریافت پیامک و نوتیفیکیشن رو بده.</li>
+        <li>یه قانون جدید (<b>+</b>) بساز. توی <b>Sender</b>، شماره یا اسم فرستنده‌ی پیامک‌های ${bank?.name || 'بانک'} رو دقیقاً همون‌طور که توی پیام‌ها می‌بینی بنویس.</li>
+        <li>توی <b>URL</b>، آدرس بالا رو Paste کن.</li>
+        <li>قالب پیام (JSON template) رو این بذار:${copyBox('sms-android-template', androidTemplate)}</li>
+        <li>برای اینکه رمز پویا و کد تأیید اصلاً فرستاده نشن، توی <b>Text filter</b> اینو بذار:${copyBox('sms-android-filter', androidFilter)}</li>
+        <li>ذخیره کن و دکمه‌ی <b>Test</b> رو بزن.</li>
+        <li>توی تنظیمات باتری گوشی، محدودیت باتری این اپ رو بردار (مخصوصاً شیائومی و سامسونگ)، وگرنه ممکنه پیامک‌ها دیر یا اصلاً فرستاده نشن. اگه Google Messages داری، <b>RCS chats</b> رو خاموش کن.</li>
+      </ol>
+
+      <div class="muted" style="font-size:.75rem;margin-top:10px">🔒 پیامک‌های رمز پویا و کد تأیید روی سرور خودکار کنار گذاشته می‌شن و ذخیره نمی‌شن.</div>
+      <div id="sms-test-result" class="muted" style="font-size:.8rem;margin-top:8px"></div>
+      <button class="action secondary" id="sms-test">ارسال پیامک آزمایشی ۱۰ هزار ریالی</button>
+      <button class="action" id="sms-done">تموم شد</button>
+    </div>
+  `;
+  manualModal.hidden = false;
+
+  const showPlatform = (platform) => {
+    document.querySelectorAll('[data-platform]').forEach((b) => b.classList.toggle('active', b.dataset.platform === platform));
+    document.querySelectorAll('[data-steps]').forEach((s) => { s.hidden = s.dataset.steps !== platform; });
+  };
+  document.querySelectorAll('[data-platform]').forEach((b) => b.addEventListener('click', () => showPlatform(b.dataset.platform)));
+  showPlatform(detectPhonePlatform());
+
+  document.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(document.getElementById(b.dataset.copy).textContent);
+      b.textContent = 'کپی شد ✓';
+    } catch (e) {
+      b.textContent = 'دستی کپی کن';
+    }
+    setTimeout(() => { b.textContent = 'کپی'; }, 1500);
+  }));
+
+  onClickLocked(document.getElementById('sms-test'), async () => {
+    const result = document.getElementById('sms-test-result');
+    try {
+      const res = await fetch(`${API}/webhook/sms/${currentUser.api_key}/${account.bank_code}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: testSmsFor(account) }),
+      });
+      const data = await res.json();
+      result.style.color = data.parsed ? 'var(--green)' : 'var(--red)';
+      result.textContent = data.parsed
+        ? '✓ آدرس درسته. یه تراکنش آزمایشی ۱۰ هزار ریالی توی «در انتظار» ساخته شد — حذفش کن تا موجودی برگرده.'
+        : `ارسال نشد: ${data.error || 'پیامک تشخیص داده نشد'}`;
+    } catch (e) {
+      result.style.color = 'var(--red)';
+      result.textContent = 'اتصال برقرار نشد';
+    }
+  });
+  document.getElementById('sms-done').addEventListener('click', () => {
     manualModal.hidden = true;
     renderAccounts();
   });
@@ -2940,17 +3167,17 @@ const SAMPLE_SMS = {
   pasargad: '239.8000.15190614.1\n-50,000\n06/28_12:00\nمانده: 6,276,366',
 };
 
-function openSmsModal() {
+async function openSmsModal() {
+  const accounts = (await api('/accounts')).filter((a) => a.bank !== 'cash');
   smsModal.innerHTML = `
     <div class="card">
       <strong>شبیه‌ساز پیامک بانکی</strong>
       <div class="muted" style="margin-top:4px">برای تست پارسر و نوتیف، بدون نیاز به پیامک واقعی</div>
       <select id="s-bank">
-        <option value="resalat">بانک رسالت</option>
-        <option value="blu">بلو</option>
-        <option value="pasargad">بانک پاسارگاد</option>
+        ${accounts.map((a) => `<option value="${a.id}">${a.display_name}</option>`).join('')}
       </select>
       <textarea id="s-text" class="sms-text"></textarea>
+      <div id="s-result" class="muted" style="font-size:.8rem;margin-top:6px"></div>
       <button class="action" id="s-send">ارسال به وب‌هوک</button>
       <button class="action secondary" id="s-cancel">انصراف</button>
     </div>
@@ -2958,15 +3185,25 @@ function openSmsModal() {
   smsModal.hidden = false;
   const bankSelect = document.getElementById('s-bank');
   const textArea = document.getElementById('s-text');
-  const fillSample = () => { textArea.value = SAMPLE_SMS[bankSelect.value]; };
+  const selected = () => accounts.find((a) => String(a.id) === bankSelect.value);
+  const fillSample = () => {
+    const a = selected();
+    if (a) textArea.value = SAMPLE_SMS[a.bank || a.bank_code] || testSmsFor(a);
+  };
   fillSample();
   bankSelect.addEventListener('change', fillSample);
   document.getElementById('s-cancel').addEventListener('click', () => { smsModal.hidden = true; });
   onClickLocked(document.getElementById('s-send'), async () => {
-    await api(`/webhook/sms/${currentUser.api_key}`, {
+    const a = selected();
+    if (!a) return;
+    const result = await api(`/webhook/sms/${currentUser.api_key}/${a.bank_code}`, {
       method: 'POST',
-      body: JSON.stringify({ bank: bankSelect.value, text: textArea.value }),
+      body: JSON.stringify({ text: textArea.value }),
     });
+    if (result && result.parsed !== true) {
+      document.getElementById('s-result').textContent = result.ignored ? 'به‌عنوان رمز پویا/کد تأیید کنار گذاشته شد.' : 'تشخیص داده نشد — توی کیفیت داده ثبت شد.';
+      return;
+    }
     smsModal.hidden = true;
     const activeTab = [...tabButtons].find((b) => b.classList.contains('active'))?.dataset.tab;
     if (activeTab) render(activeTab);
@@ -2981,6 +3218,7 @@ applyTheme(localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark');
 async function bootstrapApp() {
   const authed = await checkAuth();
   if (!authed) { showAuthScreen('login'); return; }
+  await loadBanks();
   showApp();
   // deep link support: #/tx/123 -> open pending tab
   if (location.hash.startsWith('#/tx/')) {

@@ -1,10 +1,11 @@
 function toEnglishDigits(str) {
-  const persian = '۰۱۲۳۴۵۶۷۸۹';
-  return str.replace(/[۰-۹]/g, (d) => String(persian.indexOf(d)));
+  return str
+    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
 }
 
 function toNumber(str) {
-  return parseInt(toEnglishDigits(str).replace(/,/g, ''), 10);
+  return parseInt(toEnglishDigits(str).replace(/[,٬]/g, ''), 10);
 }
 
 // رسالت و پاسارگاد: همون فرمت مشترک
@@ -36,6 +37,45 @@ function parseBlu(text) {
   return { amount_rial: amount, direction, balance_after_rial: balance };
 }
 
+// Best-effort parser for banks we have no verified sample for. Amounts in bank SMS
+// are comma-grouped, which keeps dates, times and masked card numbers from matching.
+const AMOUNT = String.raw`\d{1,3}(?:,\d{3})+|\d{4,}`;
+const EXPENSE_WORDS = /برداشت|خرید|کسر|پرداخت|انتقال\s*از|بدهکار/;
+const INCOME_WORDS = /واریز|افزایش|بستانکار|انتقال\s*به\s*حساب\s*شما|سود/;
+
+function parseGeneric(rawText) {
+  const text = toEnglishDigits(rawText).replace(/٬/g, ',');
+  const balanceMatch = text.match(new RegExp(`(?:مانده|موجودی)\\s*[:：]?\\s*(${AMOUNT})`));
+  const balance = balanceMatch ? toNumber(balanceMatch[1]) : null;
+  const withoutBalance = balanceMatch ? text.replace(balanceMatch[0], ' ') : text;
+
+  let amount = null;
+  let direction = null;
+  const signed = withoutBalance.match(new RegExp(`(^|[\\s:])([+-])\\s*(${AMOUNT})`, 'm'));
+  if (signed) {
+    amount = toNumber(signed[3]);
+    direction = signed[2] === '+' ? 'income' : 'expense';
+  } else {
+    const candidates = [
+      new RegExp(`مبلغ\\s*[:：]?\\s*(${AMOUNT})`),
+      new RegExp(`(${AMOUNT})\\s*ریال`),
+      /(?<![\d/])(\d{1,3}(?:,\d{3})+)(?![\d/])/,
+      /(?<![\d/.])(\d{4,})(?![\d/.])/,
+    ];
+    for (const re of candidates) {
+      const m = withoutBalance.match(re);
+      if (m) { amount = toNumber(m[1]); break; }
+    }
+    const expenseAt = withoutBalance.search(EXPENSE_WORDS);
+    const incomeAt = withoutBalance.search(INCOME_WORDS);
+    if (expenseAt >= 0 && (incomeAt < 0 || expenseAt < incomeAt)) direction = 'expense';
+    else if (incomeAt >= 0) direction = 'income';
+  }
+
+  if (!amount || amount <= 0 || !direction) return null;
+  return { amount_rial: amount, direction, balance_after_rial: balance };
+}
+
 const PARSERS = {
   resalat: parseSignedFormat,
   pasargad: parseSignedFormat,
@@ -43,8 +83,7 @@ const PARSERS = {
 };
 
 function parseSms(bankCode, text) {
-  const parser = PARSERS[bankCode];
-  if (!parser) return null;
+  const parser = PARSERS[bankCode] || parseGeneric;
   return parser(text);
 }
 

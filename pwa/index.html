@@ -378,6 +378,34 @@
   .otp-card.show-secured .otp-secured { opacity: 1; }
   .otp-back { margin-top: 14px; }
 
+  /* Add-account flow: bank picker and SMS setup guide. */
+  .bank-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+  .bank-tile {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 10px 4px; border-radius: 14px; cursor: pointer;
+    background: var(--surface-2); border: 1px solid var(--border-soft); color: var(--text);
+    font-family: inherit; font-size: .72rem; line-height: 1.5; text-align: center;
+  }
+  .bank-tile img, .bank-tile-emoji {
+    width: 40px; height: 40px; border-radius: 10px; background: white; padding: 4px; object-fit: contain;
+    display: grid; place-items: center; font-size: 22px;
+  }
+  .copy-box {
+    display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 8px 10px;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
+  }
+  .copy-box code { flex: 1; min-width: 0; font-size: .75rem; overflow-wrap: anywhere; user-select: all; }
+  .copy-box .copy-btn { width: auto; flex: 0 0 auto; padding: 6px 10px; border-radius: 8px; font-family: inherit; font-size: .75rem; cursor: pointer; }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 14px; padding: 4px; background: var(--surface-2); border-radius: 12px; }
+  .seg button { padding: 8px; border: none; border-radius: 9px; background: none; color: var(--muted); font-family: inherit; font-size: .85rem; font-weight: 700; cursor: pointer; }
+  .seg button.active { background: var(--surface); color: var(--gold); box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+  .steps { margin: 12px 0 0; padding-inline-start: 22px; font-size: .85rem; line-height: 1.9; }
+  .steps li { margin-bottom: 4px; }
+  .steps code { font-size: .8rem; background: var(--surface-2); padding: 1px 6px; border-radius: 6px; }
+  .steps .copy-box { margin-bottom: 4px; }
+  .sms-status { margin-top: 10px; padding: 8px 10px; border-radius: 10px; font-size: .78rem; line-height: 1.7; background: var(--blue-dim); color: var(--text); }
+  .sms-status.ok { background: rgba(52,211,153,.12); color: var(--green); }
+
   /* Pale tints are tuned for the dark theme; on a light background they need the full-strength tokens. */
   :root[data-theme="light"] .cat-pill.expense,
   :root[data-theme="light"] .badge.loss { color: var(--red); }

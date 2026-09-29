@@ -156,9 +156,9 @@ async function main() {
     const balance = {};
     for (const a of ACCOUNTS) {
       const r = await client.query(
-        `INSERT INTO accounts (bank_code, display_name, balance_rial, card_number, low_balance_threshold_rial, user_id, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-        [`${a.bank_code}-${userId}`, a.display_name, a.start, a.card_number, a.low, userId, daysAgo(100, 8)]
+        `INSERT INTO accounts (bank_code, bank, display_name, balance_rial, card_number, low_balance_threshold_rial, user_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        [`${a.bank_code}-${userId}`, a.key, a.display_name, a.start, a.card_number, a.low, userId, daysAgo(100, 8)]
       );
       accountId[a.key] = r.rows[0].id;
       balance[a.key] = a.start;
