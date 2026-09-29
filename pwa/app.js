@@ -830,15 +830,18 @@ function walkTextNodes(el) {
   while ((n = walker.nextNode())) nodes.push(n);
   return nodes;
 }
+// A marker inside another marker is handled by the outer one; masking it separately
+// would save already-masked text as its "original" and leave dots after unmasking.
+const isNestedPrivacyTarget = (el) => !!el.parentElement?.closest('.privacy-target');
 function maskEl(el) {
-  if (el.dataset.masked === '1') return;
+  if (el.dataset.masked === '1' || isNestedPrivacyTarget(el)) return;
   el.dataset.masked = '1';
   const nodes = walkTextNodes(el);
   el.__origTexts = nodes.map((n) => n.textContent);
   nodes.forEach((n) => { n.textContent = n.textContent.replace(/[\d,]+/g, '••••'); });
 }
 function unmaskEl(el) {
-  if (el.dataset.masked !== '1') return;
+  if (el.dataset.masked !== '1' || isNestedPrivacyTarget(el)) return;
   delete el.dataset.masked;
   const nodes = walkTextNodes(el);
   nodes.forEach((n, i) => { if (el.__origTexts && el.__origTexts[i] !== undefined) n.textContent = el.__origTexts[i]; });
@@ -847,6 +850,8 @@ function unmaskEl(el) {
 function applyPrivacyMode(on) {
   privacyOn = on;
   document.querySelectorAll('.privacy-target').forEach(on ? maskEl : unmaskEl);
+  // Amount inputs are hidden with CSS (dots until focused), since they have no text nodes to mask.
+  document.documentElement.classList.toggle('privacy-on', on);
   btnPrivacy.classList.toggle('active', on);
   btnPrivacy.textContent = on ? '🙈' : '🐵';
   btnPrivacy.title = on ? 'نمایش ارقام' : 'محو کردن ارقام';
@@ -871,10 +876,11 @@ btnTheme.addEventListener('click', () => {
   applyTheme(next);
 });
 // Mask any newly-rendered .privacy-target elements immediately, before paint,
-// so switching tabs never flashes real numbers even for a frame.
+// so switching tabs never flashes real numbers even for a frame. Watches the whole
+// body, not just the tab content: modals and sheets render outside #content.
 new MutationObserver(() => {
   if (privacyOn) document.querySelectorAll('.privacy-target:not([data-masked="1"])').forEach(maskEl);
-}).observe(content, { childList: true, subtree: true });
+}).observe(document.body, { childList: true, subtree: true });
 
 async function updatePendingBadge() {
   try {
@@ -1486,7 +1492,7 @@ async function renderTransactions() {
     ${pageItems.map((t) => `
       <div class="card">
         <div class="row">
-          <span class="${t.direction === 'income' ? 'amount-income' : 'amount-expense'} font-num">
+          <span class="${t.direction === 'income' ? 'amount-income' : 'amount-expense'} font-num privacy-target">
             ${t.direction === 'income' ? '+' : '-'}${toman(t.amount_rial)} ریال
           </span>
           <span class="muted font-num">${formatJalaliDateTime(new Date(t.created_at))}</span>
@@ -1618,7 +1624,7 @@ function txCard(t, cats, editable, accounts) {
       <div class="row">
         ${editable
           ? `<input id="amount-${t.id}" type="text" inputmode="numeric" class="${t.direction === 'income' ? 'amount-income' : 'amount-expense'} font-num" style="width:auto" value="${toman(t.amount_rial)}" />`
-          : `<span class="${t.direction === 'income' ? 'amount-income' : 'amount-expense'} font-num">${t.direction === 'income' ? '+' : '-'}${toman(t.amount_rial)} ریال</span>`}
+          : `<span class="${t.direction === 'income' ? 'amount-income' : 'amount-expense'} font-num privacy-target">${t.direction === 'income' ? '+' : '-'}${toman(t.amount_rial)} ریال</span>`}
         <span class="muted">${t.account_name}</span>
       </div>
       <div class="muted">موجودی بعد از تراکنش: <span class="privacy-target font-num">${t.balance_after_rial != null ? toman(t.balance_after_rial) + ' ریال' : '-'}</span></div>
@@ -1752,7 +1758,7 @@ function copyableField(label, value, displayValue) {
   return `
     <div class="row card-field" data-copy="${value}" style="margin-top:8px;cursor:pointer">
       <span style="font-size:.7rem;opacity:.8">${label}</span>
-      <span class="font-num copy-value" style="font-size:.8rem;letter-spacing:1px;direction:ltr;unicode-bidi:isolate;display:inline-block">${displayValue || value} 📋</span>
+      <span class="font-num copy-value privacy-target" style="font-size:.8rem;letter-spacing:1px;direction:ltr;unicode-bidi:isolate;display:inline-block">${displayValue || value} 📋</span>
     </div>
   `;
 }
@@ -1765,7 +1771,7 @@ function cardInfoHtml(a) {
     ${copyableField('شماره حساب', a.account_number)}
     ${copyableField('شبا', a.iban ? 'IR' + a.iban : null)}
     <div class="row" style="margin-top:8px">
-      ${a.expiry ? `<span style="font-size:.7rem;opacity:.8">انقضا: <span class="font-num">${a.expiry}</span></span>` : '<span></span>'}
+      ${a.expiry ? `<span style="font-size:.7rem;opacity:.8">انقضا: <span class="font-num privacy-target">${a.expiry}</span></span>` : '<span></span>'}
       ${a.cvv2 ? `<span style="font-size:.7rem;opacity:.8">CVV2: <span class="font-num privacy-target">${a.cvv2}</span></span>` : ''}
     </div>
   `;
@@ -1859,7 +1865,7 @@ async function renderAccounts() {
       if (diff === 0) {
         resultEl.innerHTML = '✅ موجودی دقیقاً برابره';
       } else {
-        resultEl.innerHTML = `⚠️ اختلاف: <span class="font-num" style="color:${diff > 0 ? 'var(--green)' : 'var(--red)'}">${diff > 0 ? '+' : ''}${toman(diff)} ریال</span> (برنامه ${diff > 0 ? 'کمتر' : 'بیشتر'} از واقعی ثبت کرده)`;
+        resultEl.innerHTML = `⚠️ اختلاف: <span class="font-num privacy-target" style="color:${diff > 0 ? 'var(--green)' : 'var(--red)'}">${diff > 0 ? '+' : ''}${toman(diff)} ریال</span> (برنامه ${diff > 0 ? 'کمتر' : 'بیشتر'} از واقعی ثبت کرده)`;
       }
     });
   });
@@ -2122,7 +2128,7 @@ async function openBalanceLogModal(account) {
       ${log.length === 0 ? '<p class="muted">تا حالا این حساب دستی ویرایش نشده.</p>' : log.map((l) => `
         <div class="row muted font-num" style="margin-top:10px;font-size:.75rem;border-top:1px solid var(--border-soft);padding-top:8px">
           <span>${formatJalaliDateTime(new Date(l.created_at))}</span>
-          <span>${toman(l.old_balance_rial)} ← ${toman(l.new_balance_rial)}</span>
+          <span class="font-num privacy-target">${toman(l.old_balance_rial)} ← ${toman(l.new_balance_rial)}</span>
         </div>
       `).join('')}
       <button class="action secondary" id="bal-log-close" style="margin-top:14px">بستن</button>
@@ -2156,7 +2162,7 @@ async function renderInstallments() {
       <div class="progress-track"><div class="progress-fill" style="width:${percent}%"></div></div>
       <div class="row muted" style="margin-top:6px;font-size:.75rem">
         <span>قسط ${i.paid_count} از ${i.total_count} · روز موعد: ${i.due_day_of_month}</span>
-        <span class="font-num">${toman(i.installment_amount_rial)} ریال/ماه</span>
+        <span class="font-num privacy-target">${toman(i.installment_amount_rial)} ریال/ماه</span>
       </div>
       ${i.status === 'active' ? `
         <div class="row" style="margin-top:8px">
@@ -2375,7 +2381,7 @@ async function renderInvestments() {
           <button data-edit-inv="${v.id}" class="action secondary" style="width:auto;padding:4px 8px;font-size:.7rem">✎</button>
         </div>
       </div>
-      ${unitLabel ? `<div class="muted font-num">${v.quantity} ${unitLabel} · خرید هر واحد: ${toman(v.purchase_unit_price_rial)} ریال</div>` : ''}
+      ${unitLabel ? `<div class="muted font-num"><span class="privacy-target">${Number(v.quantity)}</span> ${unitLabel} · خرید هر واحد: <span class="privacy-target">${toman(v.purchase_unit_price_rial)}</span> ریال</div>` : ''}
       <div class="muted privacy-target font-num">مبلغ اولیه: ${toman(v.invested_amount_rial)} ریال</div>
       ${unitLabel ? `
         <div class="grid2">
@@ -2416,8 +2422,8 @@ async function renderInvestments() {
     document.getElementById('v-title').placeholder = isOther ? 'مثلا «سهام» یا «صندوق درآمد ثابت»' : 'اختیاری — مثلا «سکه‌های عروسی»';
     if (!asset) return;
     document.getElementById('v-qty-label').textContent = `مقدار (${asset.unit})`;
-    document.getElementById('v-live-price').textContent = asset.unit_price_rial
-      ? `قیمت امروز بازار: ${toman(asset.unit_price_rial)} ریال برای هر ${asset.unit}`
+    document.getElementById('v-live-price').innerHTML = asset.unit_price_rial
+      ? `قیمت امروز بازار: <span class="font-num privacy-target">${toman(asset.unit_price_rial)}</span> ریال برای هر ${asset.unit}`
       : 'قیمت بازار الان در دسترس نیست — قیمت خرید رو دستی وارد کن';
   };
   vAsset.addEventListener('change', syncAssetFields);
@@ -2609,8 +2615,8 @@ function netWorthChartSvg(snapshots) {
       <polyline points="${points}" fill="none" stroke="var(--gold)" stroke-width="2" />
     </svg>
     <div class="row muted font-num" style="font-size:.7rem;margin-top:4px">
-      <span>${formatJalaliDate(new Date(snapshots[0].created_at))}: ${toman(first)} ریال</span>
-      <span>${formatJalaliDate(new Date(snapshots[snapshots.length - 1].created_at))}: ${toman(last)} ریال${changePercent != null ? ` (${changePercent >= 0 ? '+' : ''}${changePercent}٪)` : ''}</span>
+      <span>${formatJalaliDate(new Date(snapshots[0].created_at))}: <span class="privacy-target">${toman(first)}</span> ریال</span>
+      <span>${formatJalaliDate(new Date(snapshots[snapshots.length - 1].created_at))}: <span class="privacy-target">${toman(last)}</span> ریال${changePercent != null ? ` (${changePercent >= 0 ? '+' : ''}${changePercent}٪)` : ''}</span>
     </div>
   `;
 }
@@ -2827,13 +2833,13 @@ async function renderAnalytics() {
         ${vsAvg6 != null ? `<strong class="${vsAvg6 >= 0 ? 'trend-up' : 'trend-down'} font-num" style="font-size:.85rem">${vsAvg6 >= 0 ? '▲' : '▼'} ${Math.abs(vsAvg6)}٪</strong>` : '<span class="muted" style="font-size:.75rem">داده کافی نیست</span>'}
       </div>
       <div class="row muted font-num" style="margin-top:6px;font-size:.75rem">
-        <span>این ماه: ${toman(thisSum)} ریال</span>
-        <span>ماه قبل: ${toman(lastSum)} ریال</span>
+        <span>این ماه: <span class="privacy-target">${toman(thisSum)}</span> ریال</span>
+        <span>ماه قبل: <span class="privacy-target">${toman(lastSum)}</span> ریال</span>
       </div>
       ${isCurrentMonth ? `
         <div class="row muted font-num" style="margin-top:6px;font-size:.75rem;border-top:1px solid var(--border);padding-top:6px">
-          <span>میانگین هزینه‌ی روزانه: ${toman(Math.round(avgDaily))} ریال</span>
-          <span>پیش‌بینی پایان ماه: ${toman(forecastEndOfMonth)} ریال</span>
+          <span>میانگین هزینه‌ی روزانه: <span class="privacy-target">${toman(Math.round(avgDaily))}</span> ریال</span>
+          <span>پیش‌بینی پایان ماه: <span class="privacy-target">${toman(forecastEndOfMonth)}</span> ریال</span>
         </div>
       ` : ''}
     </div>
@@ -2843,19 +2849,19 @@ async function renderAnalytics() {
         <span class="muted">دوام موجودی فعلی با نرخ خرج اخیر</span>
       </div>
       <strong class="privacy-target font-num" style="font-size:1.1rem">${runwayMonths != null ? `${runwayMonths.toFixed(1)} ماه` : 'داده کافی نیست'}</strong>
-      <div class="muted" style="font-size:.7rem;margin-top:4px">بر اساس میانگین هزینه‌ی ۳ ماه اخیر (${toman(Math.round(burnRate3))} ریال/ماه) و نقدینگی فعلی (${toman(totalCash)} ریال)</div>
+      <div class="muted" style="font-size:.7rem;margin-top:4px">بر اساس میانگین هزینه‌ی ۳ ماه اخیر (<span class="privacy-target">${toman(Math.round(burnRate3))}</span> ریال/ماه) و نقدینگی فعلی (<span class="privacy-target">${toman(totalCash)}</span> ریال)</div>
     </div>
 
     <div class="card">
       <strong>تقویم تعهدات ۹۰ روز آینده</strong>
       <div class="row muted font-num" style="font-size:.7rem;margin-top:6px">
-        <span>مجموع خروجی: <span style="color:var(--red)">${toman(upcomingOutflow)}</span></span>
-        <span>مجموع ورودی: <span style="color:var(--green)">${toman(upcomingInflow)}</span></span>
+        <span>مجموع خروجی: <span style="color:var(--red)"><span class="privacy-target">${toman(upcomingOutflow)}</span></span></span>
+        <span>مجموع ورودی: <span style="color:var(--green)"><span class="privacy-target">${toman(upcomingInflow)}</span></span></span>
       </div>
       ${upcomingEvents.length === 0 ? '<p class="muted" style="margin-top:8px">هیچ تعهد سررسیددار ثبت‌شده‌ای توی ۹۰ روز آینده نیست.</p>' : upcomingEvents.map((e) => `
         <div class="row" style="margin-top:8px;font-size:.75rem">
           <span>${e.title} · <span class="muted">${e.diffDays === 0 ? 'امروز' : `${e.diffDays} روز دیگه`}</span></span>
-          <span class="font-num" style="color:${e.kind === 'debt_in' ? 'var(--green)' : 'var(--red)'}">${toman(e.amount)} ریال</span>
+          <span class="font-num" style="color:${e.kind === 'debt_in' ? 'var(--green)' : 'var(--red)'}"><span class="privacy-target">${toman(e.amount)}</span> ریال</span>
         </div>
       `).join('')}
     </div>
@@ -2885,7 +2891,7 @@ async function renderAnalytics() {
         ${biggestExpenses.map((t) => `
           <div class="row" style="margin-top:8px;font-size:.75rem">
             <span>${t.category_name || 'بدون دسته'} · <span class="muted">${formatJalaliDateTime(new Date(t.created_at))}</span></span>
-            <span class="font-num" style="color:var(--red)">${toman(t.amount_rial)} ریال</span>
+            <span class="font-num" style="color:var(--red)"><span class="privacy-target">${toman(t.amount_rial)}</span> ریال</span>
           </div>
         `).join('')}
       </div>
@@ -2898,7 +2904,7 @@ async function renderAnalytics() {
         ${unusualExpenses.map((t) => `
           <div class="row" style="margin-top:8px;font-size:.75rem">
             <span>${t.category_name} · <span class="muted">${formatJalaliDateTime(new Date(t.created_at))}</span></span>
-            <span class="font-num" style="color:var(--amber)">${toman(t.amount_rial)} ریال</span>
+            <span class="font-num" style="color:var(--amber)"><span class="privacy-target">${toman(t.amount_rial)}</span> ریال</span>
           </div>
         `).join('')}
       </div>
@@ -2911,7 +2917,7 @@ async function renderAnalytics() {
         ${recurringPayments.map((g) => `
           <div class="row" style="margin-top:8px;font-size:.75rem">
             <span>${g.name} · <span class="muted">${g.months.size} از ۴ ماه</span></span>
-            <span class="font-num">${toman(g.amount)} ریال</span>
+            <span class="font-num"><span class="privacy-target">${toman(g.amount)}</span> ریال</span>
           </div>
         `).join('')}
       </div>
@@ -2923,7 +2929,7 @@ async function renderAnalytics() {
         ${duplicateFlagged.map((t) => `
           <div class="row" style="margin-top:8px;font-size:.75rem">
             <span>${t.account_name} · <span class="muted">${formatJalaliDateTime(new Date(t.created_at))}</span></span>
-            <span class="font-num">${toman(t.amount_rial)} ریال</span>
+            <span class="font-num"><span class="privacy-target">${toman(t.amount_rial)}</span> ریال</span>
           </div>
         `).join('')}
       </div>
@@ -2938,9 +2944,9 @@ async function renderAnalytics() {
       <strong>مقایسه‌ی ۶ ماه اخیر (هزینه/درآمد)</strong>
       ${last6.map((m) => `
         <div style="margin-top:8px">
-          <div class="row muted" style="font-size:.7rem"><span>${JALALI_MONTH_NAMES[m.jm - 1]} ${m.jy}</span><span class="font-num ${m.net >= 0 ? 'trend-up' : 'trend-down'}">خالص: ${toman(m.net)}</span></div>
-          <div class="bar-row"><span style="font-size:.65rem;width:35px;flex-shrink:0;color:var(--red)">هزینه</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(m.exp / maxLast6 * 100)}%;background:var(--red)"></div></div><span class="font-num" style="font-size:.65rem;width:auto;flex-shrink:0">${toman(m.exp)}</span></div>
-          <div class="bar-row"><span style="font-size:.65rem;width:35px;flex-shrink:0;color:var(--green)">درآمد</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(m.inc / maxLast6 * 100)}%;background:var(--green)"></div></div><span class="font-num" style="font-size:.65rem;width:auto;flex-shrink:0">${toman(m.inc)}</span></div>
+          <div class="row muted" style="font-size:.7rem"><span>${JALALI_MONTH_NAMES[m.jm - 1]} ${m.jy}</span><span class="font-num ${m.net >= 0 ? 'trend-up' : 'trend-down'}">خالص: <span class="privacy-target">${toman(m.net)}</span></span></div>
+          <div class="bar-row"><span style="font-size:.65rem;width:35px;flex-shrink:0;color:var(--red)">هزینه</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(m.exp / maxLast6 * 100)}%;background:var(--red)"></div></div><span class="font-num" style="font-size:.65rem;width:auto;flex-shrink:0"><span class="privacy-target">${toman(m.exp)}</span></span></div>
+          <div class="bar-row"><span style="font-size:.65rem;width:35px;flex-shrink:0;color:var(--green)">درآمد</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(m.inc / maxLast6 * 100)}%;background:var(--green)"></div></div><span class="font-num" style="font-size:.65rem;width:auto;flex-shrink:0"><span class="privacy-target">${toman(m.inc)}</span></span></div>
         </div>
       `).join('')}
     </div>
@@ -2951,7 +2957,7 @@ async function renderAnalytics() {
         <div class="bar-row">
           <span style="font-size:.75rem;width:90px;flex-shrink:0">${name}</span>
           <div class="bar-track"><div class="bar-fill" style="width:${Math.round(amount / maxCategoryAmount * 100)}%"></div></div>
-          <span class="font-num" style="font-size:.7rem;width:auto;flex-shrink:0">${toman(amount)} (${categoryShare(amount)}٪)</span>
+          <span class="font-num" style="font-size:.7rem;width:auto;flex-shrink:0"><span class="privacy-target">${toman(amount)}</span> (${categoryShare(amount)}٪)</span>
         </div>
       `).join('')}
     </div>
@@ -2962,7 +2968,7 @@ async function renderAnalytics() {
         <div class="weekday-bar-row">
           <span style="font-size:.7rem;width:55px;flex-shrink:0">${name}</span>
           <div class="weekday-bar-track"><div class="weekday-bar-fill" style="width:${Math.round(weekdaySums[i] / maxWeekday * 100)}%"></div></div>
-          <span class="font-num" style="font-size:.65rem;width:auto;flex-shrink:0">${toman(weekdaySums[i])}</span>
+          <span class="font-num" style="font-size:.65rem;width:auto;flex-shrink:0"><span class="privacy-target">${toman(weekdaySums[i])}</span></span>
         </div>
       `).join('')}
     </div>
@@ -3273,7 +3279,7 @@ async function renderTrash() {
     <strong>${title} (${items.length})</strong>
     ${items.length === 0 ? '<p class="muted">چیزی توی سطل نیست.</p>' : items.map((item) => `
       <div class="card row">
-        <span>${item.title || item.person_name || (item.amount_rial ? toman(item.amount_rial) + ' ریال' : 'مورد حذف‌شده')}</span>
+        <span>${item.title || item.person_name || (item.amount_rial ? `<span class="font-num privacy-target">${toman(item.amount_rial)}</span> ریال` : 'مورد حذف‌شده')}</span>
         <button class="action secondary" data-restore="${item.id}" data-restore-fn="${restoreFn}" style="width:auto">↩️ بازیابی</button>
       </div>
     `).join('')}

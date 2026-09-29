@@ -191,6 +191,9 @@
   [hidden] { display: none !important; }
 
   .privacy-target { user-select: text; }
+  /* Privacy mode: amount fields show dots until you tap in to edit them. */
+  html.privacy-on input[inputmode="numeric"]:not(:focus),
+  html.privacy-on input[inputmode="decimal"]:not(:focus) { -webkit-text-security: disc; }
 
   .cat-pill-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
   .cat-pill {
