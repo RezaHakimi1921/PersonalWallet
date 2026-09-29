@@ -2015,6 +2015,128 @@ function detectPhonePlatform() {
 }
 
 // Step 3: how to forward this account's bank SMS to the app, per phone platform.
+// ---------- iPhone setup tour ----------
+// Recreations of the iOS Shortcuts screens (from real screenshots) instead of the
+// screenshots themselves: a real screenshot carries its owner's webhook key, and
+// recreating them lets every user see their own address and bank in the mock.
+// `hl` names the element to highlight on the current step.
+function iosMockScreen(screen, hl, ctx) {
+  const mark = (key) => (hl === key ? ' ios-hl' : '');
+  const statusBar = '<div class="ios-status"><span>18:32</span><span>▂▄▆ LTE ▮</span></div>';
+  if (screen === 'automation-tab') {
+    return `${statusBar}
+      <div class="ios-toolbar"><span></span><span class="ios-circle${mark('plus')}">＋</span></div>
+      <div class="ios-large-title">Automation</div>
+      <div class="ios-muted-block">Personal Automation</div>
+      <div class="ios-tabbar"><span>Shortcuts</span><span class="ios-blue">Automation</span><span>Gallery</span></div>`;
+  }
+  if (screen === 'triggers') {
+    return `${statusBar}
+      <div class="ios-large-title">New Automation</div>
+      <div class="ios-group">
+        ${['Time of Day', 'Alarm', 'Sleep', 'Email', 'Message', 'Wi-Fi', 'Battery Level']
+          .map((t) => `<div class="ios-cell${t === 'Message' ? mark('message') : ''}"><span>${t}</span><span class="ios-dim">›</span></div>`).join('')}
+      </div>`;
+  }
+  if (screen === 'when') {
+    const immediate = ctx.stepKey !== 'sender';
+    return `${statusBar}
+      <div class="ios-toolbar"><span class="ios-circle">‹</span><span class="ios-pill${mark('next')}">Next</span></div>
+      <div class="ios-title">When</div>
+      <div class="ios-cell ios-card${mark('sender')}"><span>Sender</span><span class="ios-blue">${ctx.senderLabel}</span></div>
+      <div class="ios-cell ios-card${mark('contains')}"><span>Message Contains</span><span class="ios-blue">Choose</span></div>
+      <div class="ios-group">
+        <div class="ios-cell"><span>Run After Confirmation</span><span class="ios-blue">${immediate ? '' : '✓'}</span></div>
+        <div class="ios-cell${mark('run')}"><span>Run Immediately</span><span class="ios-blue">${immediate ? '✓' : ''}</span></div>
+      </div>`;
+  }
+  if (screen === 'do') {
+    return `${statusBar}
+      <div class="ios-toolbar"><span class="ios-circle">‹</span><span></span></div>
+      <div class="ios-title">Do</div>
+      <div class="ios-cell ios-card${mark('create')}"><span class="ios-blue">＋ Create New Shortcut</span><span></span></div>
+      <div class="ios-muted-block">My Shortcuts</div>`;
+  }
+  if (screen === 'search') {
+    return `${statusBar}
+      <div class="ios-search">🔍 <span>Get Contents</span></div>
+      <div class="ios-group">
+        <div class="ios-cell${mark('action')}"><span><span class="ios-app-icon">⤓</span> Get Contents of URL</span><span></span></div>
+        <div class="ios-cell ios-dim"><span><span class="ios-app-icon ios-app-icon-dim">⤓</span> Get Contents of Web Page</span><span></span></div>
+      </div>`;
+  }
+  // 'editor': the shortcut, built up step by step (ctx.stage: how far the fields are filled in).
+  const s = ctx.stage;
+  return `${statusBar}
+    <div class="ios-toolbar"><span class="ios-circle">‹</span><span class="ios-nav-title">When I Get a Message…</span><span class="ios-circle ios-done${mark('done')}">✓</span></div>
+    <div class="ios-action"><span class="ios-blue">⤓</span> Receive messages as input</div>
+    <div class="ios-action ios-action-main">
+      <div><span class="ios-app-icon">⤓</span> Get contents of <span class="ios-token${mark('url')}">${s >= 1 ? ctx.url : 'URL'}</span>
+        <span class="ios-chevron${mark('expand')}">⌄</span></div>
+      ${s >= 2 ? `
+        <div class="ios-field${mark('method')}"><span>Method</span><span class="ios-blue">POST</span></div>
+        <div class="ios-field"><span>Headers</span><span class="ios-dim">⌄</span></div>` : ''}
+      ${s >= 3 ? `
+        <div class="ios-field ios-kv${mark('header')}"><span class="ios-minus">−</span><span>Content-Type</span><span>application/json</span></div>` : ''}
+      ${s >= 2 ? '<div class="ios-field ios-add"><span class="ios-plus">+</span> Add new header</div>' : ''}
+      ${s >= 4 ? `
+        <div class="ios-field"><span>Request Body</span><span class="ios-blue">JSON</span></div>
+        <div class="ios-field ios-kv${mark('body')}"><span class="ios-minus">−</span><span>text</span><span class="ios-var">⤓ Shortcut Input</span></div>
+        <div class="ios-field ios-add"><span class="ios-plus">+</span> Add new field</div>` : ''}
+    </div>`;
+}
+
+function iosTourSteps(ctx) {
+  const copy = (label, value) => ({ label, value });
+  return [
+    { screen: 'automation-tab', hl: 'plus', text: 'اپ <b>Shortcuts</b> (میان‌برها) رو باز کن، برو تب <b>Automation</b> و دکمه‌ی <b>＋</b> بالای صفحه رو بزن.' },
+    { screen: 'triggers', hl: 'message', text: 'از لیست، <b>Message</b> رو انتخاب کن.' },
+    {
+      screen: 'when', hl: 'sender', key: 'sender',
+      text: `روی <b>Sender</b> بزن و فرستنده‌ی پیامک‌های <b>${ctx.bankName}</b> رو انتخاب کن. اگه توی لیست نبود، اول شماره‌ای که پیامک‌های بانک ازش میاد رو با اسم «${ctx.bankName}» توی مخاطب‌ها ذخیره کن.`
+        + (ctx.last4 ? `<div class="tour-alt">راه دیگه: به‌جای Sender، توی <b>Message Contains</b> چهار رقم آخر کارتت رو بنویس — اگه بانکت اون رو توی پیامک می‌نویسه.</div>` : ''),
+      copies: ctx.last4 ? [copy('۴ رقم آخر کارت', ctx.last4)] : [],
+    },
+    { screen: 'when', hl: 'run', text: '<b>Run Immediately</b> رو انتخاب کن تا هر بار ازت تأیید نخواد. بعد <b>Next</b> رو بزن.' },
+    { screen: 'do', hl: 'create', text: '<b>Create New Shortcut</b> رو بزن.' },
+    { screen: 'search', hl: 'action', text: 'توی جستجوی اکشن‌ها بنویس <b>Get Contents of URL</b> و انتخابش کن.', copies: [copy('اسم اکشن', 'Get Contents of URL')] },
+    { screen: 'editor', hl: 'url', stage: 1, text: 'روی <b>URL</b> آبی بزن و آدرس اختصاصی این حساب رو Paste کن.', copies: [copy('آدرس', ctx.url)] },
+    { screen: 'editor', hl: 'method', stage: 2, text: 'روی فلش <b>⌄</b> کنار آدرس بزن تا تنظیمات باز بشه. <b>Method</b> رو <b>POST</b> کن.' },
+    {
+      screen: 'editor', hl: 'header', stage: 3,
+      text: 'توی <b>Headers</b>، <b>Add new header</b> رو بزن و این دو تا رو بنویس.',
+      copies: [copy('کلید (Key)', 'Content-Type'), copy('مقدار (Value)', 'application/json')],
+    },
+    {
+      screen: 'editor', hl: 'body', stage: 4,
+      text: '<b>Request Body</b> رو <b>JSON</b> کن، بعد <b>Add new field</b> ← <b>Text</b>. کلید رو <code dir="ltr">text</code> بنویس و برای مقدار، از نوار بالای کیبورد <b>Shortcut Input</b> رو انتخاب کن.',
+      copies: [copy('کلید (Key)', 'text')],
+    },
+    { screen: 'editor', hl: 'done', stage: 4, text: 'دکمه‌ی <b>✓</b> آبی بالا رو بزن. تمومه! از این به بعد هر پیامک این بانک خودکار ثبت می‌شه. برای اطمینان، پایین همین صفحه «ارسال پیامک آزمایشی» رو بزن.' },
+  ];
+}
+
+function renderIosTour(container, ctx, index = 0) {
+  const steps = iosTourSteps(ctx);
+  const step = steps[index];
+  const copyId = (i) => `tour-copy-${index}-${i}`;
+  container.innerHTML = `
+    <div class="tour-progress" aria-hidden="true">${steps.map((_, i) => `<i class="${i === index ? 'on' : i < index ? 'done' : ''}"></i>`).join('')}</div>
+    <div class="muted" style="font-size:.75rem;text-align:center;margin-top:6px">مرحله‌ی ${index + 1} از ${steps.length}</div>
+    <div class="ios-phone" dir="ltr">${iosMockScreen(step.screen, step.hl, { ...ctx, stage: step.stage || 0, stepKey: step.key })}</div>
+    <div class="tour-text">${step.text}</div>
+    ${(step.copies || []).map((c, i) => `
+      <div class="muted" style="margin-top:8px;font-size:.75rem">${c.label}</div>
+      <div class="copy-box"><code id="${copyId(i)}" dir="ltr">${c.value}</code><button class="secondary copy-btn" data-copy-target="${copyId(i)}">کپی</button></div>`).join('')}
+    <div class="tour-nav">
+      <button class="action secondary" data-tour="prev" ${index === 0 ? 'disabled' : ''}>› قبلی</button>
+      <button class="action" data-tour="next" ${index === steps.length - 1 ? 'disabled' : ''}>بعدی ‹</button>
+    </div>
+  `;
+  container.querySelector('[data-tour="prev"]').addEventListener('click', () => renderIosTour(container, ctx, index - 1));
+  container.querySelector('[data-tour="next"]').addEventListener('click', () => renderIosTour(container, ctx, index + 1));
+}
+
 function openSmsSetupModal(account, { justCreated = false } = {}) {
   const bank = bankOf(account);
   const webhookUrl = `${location.origin}/api/webhook/sms/${currentUser.api_key}/${account.bank_code}`;
@@ -2048,17 +2170,7 @@ function openSmsSetupModal(account, { justCreated = false } = {}) {
         <button role="tab" data-platform="android">اندروید</button>
       </div>
 
-      <ol class="steps" data-steps="ios">
-        <li>اپ <b>Shortcuts</b> (میان‌برها) رو باز کن و برو تب <b>Automation</b>.</li>
-        <li><b>+</b> بزن و <b>Message</b> رو انتخاب کن.</li>
-        <li>توی <b>Sender</b>، فرستنده‌ی پیامک‌های ${bank?.name || 'بانک'} رو انتخاب کن — دقیقاً همون شماره یا اسمی که توی پیام‌ها می‌بینی.</li>
-        <li><b>Run Immediately</b> رو انتخاب کن و <b>Notify When Run</b> رو خاموش کن، بعد <b>Next</b>.</li>
-        <li><b>New Blank Automation</b> ← <b>Add Action</b> ← <b>Get Contents of URL</b>.</li>
-        <li>توی قسمت URL، آدرس بالا رو Paste کن.</li>
-        <li>روی فلش کنار اکشن بزن: <b>Method</b> رو <b>POST</b> کن و <b>Request Body</b> رو <b>JSON</b>.</li>
-        <li><b>Add new field</b> ← <b>Text</b>. کلید (Key) رو بنویس <code dir="ltr">text</code> و برای مقدار (Value)، متغیر <b>Shortcut Input</b> رو بذار؛ روش بزن و <b>Content</b> رو انتخاب کن.</li>
-        <li><b>Done</b>. از این به بعد هر پیامک این بانک خودکار فرستاده می‌شه.</li>
-      </ol>
+      <div class="ios-tour" data-steps="ios"></div>
 
       <ol class="steps" data-steps="android" hidden>
         <li>اپ رایگان و متن‌باز <b>SMS to URL Forwarder</b> رو از <b>F-Droid</b> یا صفحه‌ی Releases گیت‌هابش نصب کن. توی گوگل‌پلی نیست و هشدار Play Protect براش طبیعیه (Install anyway).</li>
@@ -2086,15 +2198,26 @@ function openSmsSetupModal(account, { justCreated = false } = {}) {
   document.querySelectorAll('[data-platform]').forEach((b) => b.addEventListener('click', () => showPlatform(b.dataset.platform)));
   showPlatform(detectPhonePlatform());
 
-  document.querySelectorAll('[data-copy-target]').forEach((b) => b.addEventListener('click', async () => {
+  const last4 = String(account.card_number || '').replace(/\D/g, '').slice(-4);
+  renderIosTour(manualModal.querySelector('.ios-tour'), {
+    url: webhookUrl,
+    bankName: bank?.name || account.display_name,
+    senderLabel: bank?.name || account.display_name,
+    last4: last4.length === 4 ? last4 : null,
+  });
+
+  // Delegated, because the tour re-renders its copy buttons on every step.
+  manualModal.querySelector('.sms-setup').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-copy-target]');
+    if (!b) return;
     try {
       await navigator.clipboard.writeText(document.getElementById(b.dataset.copyTarget).textContent);
       b.textContent = 'کپی شد ✓';
-    } catch (e) {
+    } catch (err) {
       b.textContent = 'دستی کپی کن';
     }
     setTimeout(() => { b.textContent = 'کپی'; }, 1500);
-  }));
+  });
 
   onClickLocked(document.getElementById('sms-test'), async () => {
     const result = document.getElementById('sms-test-result');

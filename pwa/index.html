@@ -473,6 +473,57 @@
   .steps li { margin-bottom: 4px; }
   .steps code { font-size: .8rem; background: var(--surface-2); padding: 1px 6px; border-radius: 6px; }
   .steps .copy-box { margin-bottom: 4px; }
+  /* iPhone setup tour: recreated iOS Shortcuts screens (always iOS dark, like the real ones). */
+  .tour-progress { display: flex; gap: 4px; justify-content: center; margin-top: 14px; }
+  .tour-progress i { width: 18px; height: 4px; border-radius: 2px; background: var(--border); }
+  .tour-progress i.done { background: var(--muted); }
+  .tour-progress i.on { background: var(--gold); width: 26px; }
+  .tour-text { margin-top: 10px; font-size: .88rem; line-height: 1.9; }
+  .tour-text code { font-size: .8rem; background: var(--surface-2); padding: 1px 6px; border-radius: 6px; }
+  .tour-alt { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); font-size: .8rem; color: var(--muted); }
+  .tour-nav { display: grid; grid-template-columns: 1fr 1.4fr; gap: 8px; }
+  .tour-nav button:disabled { opacity: .4; }
+
+  .ios-phone {
+    max-width: 290px; margin: 10px auto 0; padding: 8px 12px 14px; min-height: 330px;
+    background: #1c1c1e; border: 6px solid #3a3a3c; border-radius: 34px; color: #fff;
+    font-family: -apple-system, 'SF Pro Text', system-ui, sans-serif; font-size: 12.5px; line-height: 1.35;
+    text-align: left; overflow: hidden;
+  }
+  .ios-status { display: flex; justify-content: space-between; font-size: 10.5px; font-weight: 600; padding: 2px 8px 8px; }
+  .ios-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .ios-circle { width: 30px; height: 30px; border-radius: 50%; background: #2c2c2e; display: grid; place-items: center; font-size: 15px; flex: 0 0 auto; }
+  .ios-done { background: #0a84ff; }
+  .ios-pill { padding: 6px 14px; border-radius: 999px; background: #3a3a3c; font-weight: 600; }
+  .ios-nav-title { font-weight: 600; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .ios-large-title { font-size: 22px; font-weight: 700; margin: 4px 2px 10px; }
+  .ios-title { font-size: 19px; font-weight: 700; margin: 4px 2px 8px; }
+  .ios-group, .ios-card { background: #2c2c2e; border-radius: 12px; margin-bottom: 10px; overflow: hidden; }
+  .ios-cell { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #3a3a3c; }
+  .ios-group .ios-cell:last-child, .ios-card { border-bottom: none; }
+  .ios-blue { color: #0a84ff; }
+  .ios-dim { color: #8e8e93; }
+  .ios-muted-block { color: #8e8e93; font-size: 11px; padding: 8px 4px; }
+  .ios-tabbar { display: flex; justify-content: space-around; margin-top: 110px; padding-top: 8px; border-top: 1px solid #3a3a3c; font-size: 10.5px; color: #8e8e93; }
+  .ios-search { background: #2c2c2e; border-radius: 10px; padding: 8px 10px; margin-bottom: 10px; color: #fff; }
+  .ios-app-icon { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 5px; background: #30d158; color: #fff; font-size: 11px; margin-right: 4px; vertical-align: middle; }
+  .ios-app-icon-dim { background: #3a3a3c; }
+  .ios-action { background: #2c2c2e; border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; font-weight: 600; }
+  .ios-action-main { font-weight: 600; }
+  .ios-token { color: #0a84ff; background: rgba(10,132,255,.14); border-radius: 6px; padding: 1px 4px; word-break: break-all; font-weight: 500; }
+  .ios-chevron { color: #0a84ff; margin-left: 4px; display: inline-block; border-radius: 50%; padding: 0 3px; }
+  .ios-field { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 2px; border-top: 1px solid #3a3a3c; font-weight: 400; }
+  .ios-kv { justify-content: flex-start; }
+  .ios-kv > span:nth-child(2) { width: 88px; flex: 0 0 auto; }
+  .ios-minus { width: 16px; height: 16px; border-radius: 50%; background: #ff453a; display: grid; place-items: center; font-size: 12px; line-height: 1; flex: 0 0 auto; }
+  .ios-plus { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: #30d158; color: #fff; font-size: 13px; font-weight: 700; line-height: 1; margin-right: 6px; }
+  .ios-add { justify-content: flex-start; color: #8e8e93; }
+  .ios-var { color: #0a84ff; background: rgba(10,132,255,.14); border-radius: 6px; padding: 1px 6px; font-size: 11.5px; }
+  /* The element to tap on this step. */
+  .ios-hl { position: relative; outline: 2px solid #ffd60a; outline-offset: 2px; border-radius: 10px; animation: ios-hl-pulse 1.6s var(--ease-in-out) infinite; }
+  @keyframes ios-hl-pulse { 50% { outline-color: rgba(255, 214, 10, .35); } }
+  @media (prefers-reduced-motion: reduce) { .ios-hl { animation: none; } }
+
   .sms-status { margin-top: 10px; padding: 8px 10px; border-radius: 10px; font-size: .78rem; line-height: 1.7; background: var(--blue-dim); color: var(--text); }
   .sms-status.ok { background: rgba(52,211,153,.12); color: var(--green); }
 
