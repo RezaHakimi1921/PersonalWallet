@@ -122,6 +122,16 @@ function buildTransactions() {
     { days: 0, account: 'mellat', amount: 12500000, text: 'بانک ملت\nبرداشت: 12,500,000 ریال\nکارت: 1234' },
     { days: 0, account: 'blu', amount: 2150000, text: 'بلو\nرضا عزیز، 2,150,000 ریال بابت خرید از حساب شما پرید.' },
     { days: 0, account: 'saman', amount: 25000000, direction: 'income', text: 'واریز:+25,000,000\nحساب:1529004' },
+    { days: 3, account: 'blu', amount: 890000, text: 'بلو\nرضا عزیز، 890,000 ریال بابت خرید از حساب شما پرید.' },
+    { days: 3, account: 'mellat', amount: 4600000, text: 'بانک ملت\nخرید: 4,600,000 ریال\nکارت: 1234' },
+    { days: 2, account: 'saman', amount: 2300000, text: 'برداشت پل:-2,300,000\nحساب:1529004' },
+    { days: 2, account: 'blu', amount: 15000000, direction: 'income', text: 'واریز پول\nرضا عزیز، 15,000,000 ریال به حساب شما نشست.' },
+    { days: 2, account: 'mellat', amount: 12500000, text: 'بانک ملت\nپرداخت: 12,500,000 ریال\nکارت: 1234' },
+    { days: 1, account: 'blu', amount: 380000, text: 'بلو\nرضا عزیز، 380,000 ریال از حساب شما پرید.' },
+    { days: 1, account: 'mellat', amount: 7200000, text: 'بانک ملت\nبرداشت: 7,200,000 ریال\nکارت: 1234' },
+    { days: 1, account: 'saman', amount: 1650000, text: 'برداشت پل:-1,650,000\nحساب:1529004' },
+    { days: 0, account: 'blu', amount: 4800000, text: 'بلو\nرضا عزیز، 4,800,000 ریال از حساب شما پرید.' },
+    { days: 0, account: 'mellat', amount: 950000, text: 'بانک ملت\nخرید: 950,000 ریال\nکارت: 1234' },
   ];
   pending.forEach((p) => tx.push({
     at: daysAgo(p.days, p.days === 0 ? 9 : 18), account: p.account, direction: p.direction || 'expense',

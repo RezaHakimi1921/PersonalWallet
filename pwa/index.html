@@ -134,6 +134,40 @@
     background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 14px;
   }
   .metric-label { font-size: 0.75rem; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
+  .metric-card.tappable { display: block; width: 100%; text-align: right; font-family: inherit; color: var(--text); cursor: pointer; }
+  @media (hover: hover) and (pointer: fine) {
+    .metric-card.tappable:hover { border-color: var(--muted); }
+  }
+
+  /* Jalali calendar (date pickers, reminders): Saturday-first week, like the heatmap. */
+  .jcal-head { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; text-align: center; }
+  .jcal-head button { width: auto; padding: 8px 14px; border-radius: 10px; font-family: inherit; cursor: pointer; }
+  .jcal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-top: 10px; }
+  .jcal-weekday { text-align: center; font-size: .65rem; color: var(--muted); padding-bottom: 2px; }
+  .jcal-day {
+    aspect-ratio: 1; padding: 0; border-radius: 10px; border: 1px solid var(--border-soft);
+    background: var(--surface-2); color: var(--text); font-family: 'IRANSansFaNum', inherit; font-size: .85rem; cursor: pointer;
+  }
+  .jcal-day.today { border: 2px solid var(--gold); }
+  .jcal-day.selected { background: linear-gradient(135deg, var(--gold), var(--gold-dark)); color: var(--on-gold); border-color: transparent; font-weight: 700; }
+
+  .date-field {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; margin-top: 8px;
+    padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--muted); font-family: inherit; font-size: .85rem; text-align: right; cursor: pointer;
+  }
+  .date-field .muted { font-size: .7rem; }
+  .date-field.has-value { color: var(--text); border-color: var(--gold); }
+  .range-chips { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .chip {
+    padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border-soft); background: var(--surface-2);
+    color: var(--muted); font-family: inherit; font-size: .75rem; cursor: pointer;
+  }
+  .chip.active { background: var(--blue-dim); border-color: var(--blue); color: var(--blue); font-weight: 700; }
+
+  .flow-list { margin-top: 6px; }
+  .flow-item { padding: 8px 0; border-bottom: 1px solid var(--border-soft); align-items: flex-start; }
+  .flow-item:last-child { border-bottom: none; }
   .metric-value { font-size: 1.25rem; font-weight: 800; margin-top: 8px; }
 
   .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }

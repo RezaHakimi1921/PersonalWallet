@@ -98,31 +98,48 @@ function formatJalaliDateTime(dateObj) {
 
 // Small inline Jalali calendar picker: renders a month grid into `containerId`, writes
 // the selected Gregorian date (yyyy-mm-dd) into `hiddenInputId` for form submission.
+function jalaliToIso(jy, jm, jd) {
+  const g = Jalali.toGregorian(jy, jm, jd);
+  return `${g.gy}-${String(g.gm).padStart(2, '0')}-${String(g.gd).padStart(2, '0')}`;
+}
+// «YYYY-MM-DD» as a local date (new Date('YYYY-MM-DD') would be UTC midnight, i.e. 03:30 in Tehran).
+function isoToLocalDate(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+function formatJalaliIso(iso) {
+  const d = isoToLocalDate(iso);
+  const j = Jalali.toJalaali(d.getFullYear(), d.getMonth() + 1, d.getDate());
+  return `${j.jd} ${JALALI_MONTH_NAMES[j.jm - 1]} ${j.jy}`;
+}
+const JALALI_WEEKDAY_INITIALS = ['ش', 'ی', 'د', 'س', 'چ', 'پ', 'ج'];
+
 function createJalaliCalendar(containerId, hiddenInputId, initialDate) {
   const container = document.getElementById(containerId);
   const hidden = document.getElementById(hiddenInputId);
   const now = initialDate || new Date();
   const state = Jalali.toJalaali(now.getFullYear(), now.getMonth() + 1, now.getDate());
-
-  function toIso(jy, jm, jd) {
-    const g = Jalali.toGregorian(jy, jm, jd);
-    return `${g.gy}-${String(g.gm).padStart(2, '0')}-${String(g.gd).padStart(2, '0')}`;
-  }
+  const today = Jalali.toJalaali(new Date().getFullYear(), new Date().getMonth() + 1, new Date().getDate());
 
   function draw() {
     const len = Jalali.monthLength(state.jy, state.jm);
+    const first = Jalali.toGregorian(state.jy, state.jm, 1);
+    const offset = (new Date(first.gy, first.gm - 1, first.gd).getDay() + 1) % 7; // Saturday-first week
     const days = Array.from({ length: len }, (_, i) => i + 1);
+    const isToday = (d) => state.jy === today.jy && state.jm === today.jm && d === today.jd;
     container.innerHTML = `
-      <div class="row">
-        <button type="button" class="secondary" data-nav="-1" style="width:auto;padding:6px 12px">‹</button>
+      <div class="jcal-head">
+        <button type="button" class="secondary" data-nav="-1" aria-label="ماه قبل">›</button>
         <strong>${JALALI_MONTH_NAMES[state.jm - 1]} ${state.jy}</strong>
-        <button type="button" class="secondary" data-nav="1" style="width:auto;padding:6px 12px">›</button>
+        <button type="button" class="secondary" data-nav="1" aria-label="ماه بعد">‹</button>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-top:8px">
-        ${days.map((d) => `<button type="button" data-day="${d}" style="padding:8px 0;border-radius:8px;border:1px solid var(--border);background:${d === state.jd ? 'var(--gold)' : 'transparent'};cursor:pointer">${d}</button>`).join('')}
+      <div class="jcal-grid">
+        ${JALALI_WEEKDAY_INITIALS.map((w) => `<span class="jcal-weekday">${w}</span>`).join('')}
+        ${'<span></span>'.repeat(offset)}
+        ${days.map((d) => `<button type="button" class="jcal-day${d === state.jd ? ' selected' : ''}${isToday(d) ? ' today' : ''}" data-day="${d}">${d}</button>`).join('')}
       </div>
     `;
-    hidden.value = toIso(state.jy, state.jm, state.jd);
+    hidden.value = jalaliToIso(state.jy, state.jm, state.jd);
     container.querySelector('[data-nav="-1"]').addEventListener('click', () => nav(-1));
     container.querySelector('[data-nav="1"]').addEventListener('click', () => nav(1));
     container.querySelectorAll('[data-day]').forEach((b) => {
@@ -140,6 +157,58 @@ function createJalaliCalendar(containerId, hiddenInputId, initialDate) {
   }
 
   draw();
+}
+
+// A Jalali date chosen in a modal. `value` / the result are «YYYY-MM-DD» (Gregorian ISO,
+// which is how dates are stored and compared); '' means no date.
+function openJalaliDatePicker({ title, value, onChange }) {
+  // Its own overlay, so it can open on top of a form that's already in the main modal.
+  const overlay = document.getElementById('sms-modal');
+  overlay.innerHTML = `
+    <div class="card">
+      <strong>${title}</strong>
+      <div id="jdp-cal" style="margin-top:10px"></div>
+      <input type="hidden" id="jdp-value" />
+      <button class="action" id="jdp-ok">انتخاب</button>
+      <div class="grid2">
+        <button class="action secondary" id="jdp-clear">بدون تاریخ</button>
+        <button class="action secondary" id="jdp-cancel">انصراف</button>
+      </div>
+    </div>
+  `;
+  overlay.hidden = false;
+  createJalaliCalendar('jdp-cal', 'jdp-value', value ? isoToLocalDate(value) : new Date());
+  const close = (result) => { overlay.hidden = true; if (result !== undefined) onChange(result); };
+  document.getElementById('jdp-ok').addEventListener('click', () => close(document.getElementById('jdp-value').value));
+  document.getElementById('jdp-clear').addEventListener('click', () => close(''));
+  document.getElementById('jdp-cancel').addEventListener('click', () => close(undefined));
+}
+
+// A tappable Jalali date field backed by a hidden «YYYY-MM-DD» input with the same id + '-value'.
+function dateFieldHtml(id, label, iso) {
+  return `
+    <button type="button" class="date-field${iso ? ' has-value' : ''}" id="${id}">
+      <span class="muted">${label}</span>
+      <span class="font-num" data-date-text>${iso ? formatJalaliIso(iso) : 'انتخاب کنید'}</span>
+    </button>
+    <input type="hidden" id="${id}-value" value="${iso || ''}" />`;
+}
+function wireDateField(id, title) {
+  const button = document.getElementById(id);
+  const hidden = document.getElementById(`${id}-value`);
+  button.addEventListener('click', () => openJalaliDatePicker({
+    title,
+    value: hidden.value,
+    onChange: (iso) => {
+      hidden.value = iso;
+      button.classList.toggle('has-value', !!iso);
+      button.querySelector('[data-date-text]').textContent = iso ? formatJalaliIso(iso) : 'انتخاب کنید';
+    },
+  }));
+}
+// A Date as a local «YYYY-MM-DD» (toISOString would shift it to UTC, a day early in Tehran).
+function dateToLocalIso(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 function toman(rial) {
@@ -879,9 +948,13 @@ async function renderOverview() {
   const totalIOwe = openDebts.filter((d) => d.type === 'i_owe').reduce((s, d) => s + Number(d.amount_rial), 0);
   const totalOwedToMe = openDebts.filter((d) => d.type === 'owed_to_me').reduce((s, d) => s + Number(d.amount_rial), 0);
   const now = new Date();
+  const nowJ = Jalali.toJalaali(now.getFullYear(), now.getMonth() + 1, now.getDate());
+  const monthLabel = `${JALALI_MONTH_NAMES[nowJ.jm - 1]} ${nowJ.jy}`;
   const thisMonthTx = transactions.filter((t) => {
+    if (t.status !== 'confirmed') return false;
     const d = new Date(t.created_at);
-    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && t.status === 'confirmed';
+    const j = Jalali.toJalaali(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    return j.jy === nowJ.jy && j.jm === nowJ.jm;
   });
   // Transfers between own accounts are neither real income nor real expense.
   const realFlowTx = thisMonthTx.filter((t) => !isNonFlowCategory(t.category_name));
@@ -934,16 +1007,16 @@ async function renderOverview() {
   const maxFlow = Math.max(monthExpense, monthIncome, 1);
   html += `
     <div class="metric-grid">
-      <div class="metric-card">
-        <div class="row"><span class="muted" style="font-size:.75rem">هزینه ماه</span> <span style="color:var(--red)">↗</span></div>
+      <button class="metric-card tappable" data-month-flow="expense">
+        <div class="row"><span class="muted" style="font-size:.75rem">هزینه ${JALALI_MONTH_NAMES[nowJ.jm - 1]}</span> <span class="muted" style="font-size:.7rem">جزئیات ‹</span></div>
         <div class="privacy-target font-num" style="color:var(--red);font-weight:800;font-size:1.1rem;margin-top:4px">-${toman(monthExpense)} <span class="muted" style="font-size:.65rem">ریال</span></div>
         <div class="mini-bar"><div class="mini-bar-fill" style="width:${Math.round(monthExpense / maxFlow * 100)}%;background:var(--red)"></div></div>
-      </div>
-      <div class="metric-card">
-        <div class="row"><span class="muted" style="font-size:.75rem">درآمد ماه</span> <span style="color:var(--green)">↙</span></div>
+      </button>
+      <button class="metric-card tappable" data-month-flow="income">
+        <div class="row"><span class="muted" style="font-size:.75rem">درآمد ${JALALI_MONTH_NAMES[nowJ.jm - 1]}</span> <span class="muted" style="font-size:.7rem">جزئیات ‹</span></div>
         <div class="privacy-target font-num" style="color:var(--green);font-weight:800;font-size:1.1rem;margin-top:4px">+${toman(monthIncome)} <span class="muted" style="font-size:.65rem">ریال</span></div>
         <div class="mini-bar"><div class="mini-bar-fill" style="width:${Math.round(monthIncome / maxFlow * 100)}%;background:var(--green)"></div></div>
-      </div>
+      </button>
     </div>
   `;
 
@@ -1016,6 +1089,54 @@ async function renderOverview() {
   if (gotoBtn) gotoBtn.addEventListener('click', () => setActiveTab('pending'));
   document.getElementById('goto-accounts')?.addEventListener('click', () => setActiveTab('accounts'));
   document.getElementById('goto-installments')?.addEventListener('click', () => setActiveTab('installments'));
+  document.querySelectorAll('[data-month-flow]').forEach((b) => b.addEventListener('click', () => {
+    const direction = b.dataset.monthFlow;
+    openMonthFlowModal(direction, realFlowTx.filter((t) => t.direction === direction), monthLabel);
+  }));
+}
+
+// The dashboard's month income/expense, broken down: per-category totals, then every transaction.
+function openMonthFlowModal(direction, txs, monthLabel) {
+  const isExpense = direction === 'expense';
+  const color = isExpense ? 'var(--red)' : 'var(--green)';
+  const total = txs.reduce((s, t) => s + Number(t.amount_rial), 0);
+  const byCategory = {};
+  txs.forEach((t) => { const n = t.category_name || 'بدون دسته'; byCategory[n] = (byCategory[n] || 0) + Number(t.amount_rial); });
+  const categories = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
+  const maxCat = categories[0]?.[1] || 1;
+  const sorted = [...txs].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  manualModal.innerHTML = `
+    <div class="card">
+      <div class="row">
+        <strong>${isExpense ? 'هزینه‌های' : 'درآمدهای'} ${monthLabel}</strong>
+        <span class="muted">${txs.length} تراکنش</span>
+      </div>
+      <div class="privacy-target font-num" style="color:${color};font-weight:800;font-size:1.3rem;margin-top:6px">${isExpense ? '-' : '+'}${toman(total)} <span class="muted" style="font-size:.7rem">ریال</span></div>
+      ${txs.length === 0 ? `<p class="muted">این ماه ${isExpense ? 'هزینه‌ای' : 'درآمدی'} ثبت نشده.</p>` : `
+        <div class="muted" style="margin-top:12px">به تفکیک دسته</div>
+        ${categories.map(([name, amount]) => `
+          <div class="bar-row">
+            <span style="font-size:.75rem;width:90px;flex-shrink:0">${name}</span>
+            <div class="bar-track"><div class="bar-fill" style="width:${Math.round(amount / maxCat * 100)}%;background:${color}"></div></div>
+            <span class="font-num privacy-target" style="font-size:.7rem;flex-shrink:0">${toman(amount)} (${Math.round(amount / total * 100)}٪)</span>
+          </div>`).join('')}
+        <div class="muted" style="margin-top:14px">همه‌ی تراکنش‌ها</div>
+        <div class="flow-list">
+          ${sorted.map((t) => `
+            <div class="row flow-item">
+              <div style="min-width:0">
+                <div style="font-size:.8rem">${t.category_name || 'بدون دسته'}${t.note ? ` <span class="muted">· ${t.note}</span>` : ''}</div>
+                <div class="muted font-num" style="font-size:.7rem">${formatJalaliDateTime(new Date(t.created_at))} · ${t.account_name}</div>
+              </div>
+              <span class="font-num privacy-target" style="color:${color};font-size:.8rem;flex-shrink:0">${toman(t.amount_rial)}</span>
+            </div>`).join('')}
+        </div>
+      `}
+      <button class="action" id="flow-close">بستن</button>
+    </div>
+  `;
+  manualModal.hidden = false;
+  document.getElementById('flow-close').addEventListener('click', () => { manualModal.hidden = true; });
 }
 
 // Suggest a category from transaction history: for a given direction+amount, pick
@@ -1298,6 +1419,20 @@ let txPage = 1;
 
 let txFilters = { account_id: '', category_id: '', direction: '', from: '', to: '' };
 
+// Quick date ranges for the transactions filter, in Jalali months.
+function txDateRanges() {
+  const now = new Date();
+  const nowJ = Jalali.toJalaali(now.getFullYear(), now.getMonth() + 1, now.getDate());
+  const prevJ = shiftJalaliMonth(nowJ.jy, nowJ.jm, -1);
+  const threeJ = shiftJalaliMonth(nowJ.jy, nowJ.jm, -2);
+  const todayIso = jalaliToIso(nowJ.jy, nowJ.jm, nowJ.jd);
+  return {
+    'this-month': { from: jalaliToIso(nowJ.jy, nowJ.jm, 1), to: todayIso },
+    'last-month': { from: jalaliToIso(prevJ.jy, prevJ.jm, 1), to: jalaliToIso(prevJ.jy, prevJ.jm, Jalali.monthLength(prevJ.jy, prevJ.jm)) },
+    'last-3-months': { from: jalaliToIso(threeJ.jy, threeJ.jm, 1), to: todayIso },
+  };
+}
+
 async function renderTransactions() {
   const [allTxs, accounts, cats] = await Promise.all([api('/transactions'), api('/accounts'), api('/categories')]);
 
@@ -1305,10 +1440,12 @@ async function renderTransactions() {
     if (txFilters.account_id && String(t.account_id) !== txFilters.account_id) return false;
     if (txFilters.category_id && String(t.category_id) !== txFilters.category_id) return false;
     if (txFilters.direction && t.direction !== txFilters.direction) return false;
-    if (txFilters.from && new Date(t.created_at) < new Date(txFilters.from)) return false;
-    if (txFilters.to && new Date(t.created_at) > new Date(txFilters.to + 'T23:59:59')) return false;
+    if (txFilters.from && new Date(t.created_at) < isoToLocalDate(txFilters.from)) return false;
+    if (txFilters.to && new Date(t.created_at) >= new Date(isoToLocalDate(txFilters.to).getTime() + 864e5)) return false;
     return true;
   });
+  const ranges = txDateRanges();
+  const activeRange = Object.keys(ranges).find((k) => ranges[k].from === txFilters.from && ranges[k].to === txFilters.to);
 
   const filterBarHtml = `
     <div class="card">
@@ -1321,9 +1458,14 @@ async function renderTransactions() {
         <option value="expense" ${txFilters.direction === 'expense' ? 'selected' : ''}>فقط هزینه</option>
         <option value="income" ${txFilters.direction === 'income' ? 'selected' : ''}>فقط درآمد</option>
       </select>
+      <div class="range-chips">
+        <button type="button" class="chip${activeRange === 'this-month' ? ' active' : ''}" data-range="this-month">این ماه</button>
+        <button type="button" class="chip${activeRange === 'last-month' ? ' active' : ''}" data-range="last-month">ماه قبل</button>
+        <button type="button" class="chip${activeRange === 'last-3-months' ? ' active' : ''}" data-range="last-3-months">۳ ماه اخیر</button>
+      </div>
       <div class="grid2">
-        <input id="tf-from" type="date" value="${txFilters.from}" />
-        <input id="tf-to" type="date" value="${txFilters.to}" />
+        <div>${dateFieldHtml('tf-from', 'از تاریخ', txFilters.from)}</div>
+        <div>${dateFieldHtml('tf-to', 'تا تاریخ', txFilters.to)}</div>
       </div>
       <button class="action secondary" id="tf-clear">پاک کردن فیلترها</button>
     </div>
@@ -1380,8 +1522,19 @@ function wireTxFilters() {
   document.getElementById('tf-account').addEventListener('change', (e) => { txFilters.account_id = e.target.value; txPage = 1; renderTransactions(); });
   document.getElementById('tf-category').addEventListener('change', (e) => { txFilters.category_id = e.target.value; txPage = 1; renderTransactions(); });
   document.getElementById('tf-direction').addEventListener('change', (e) => { txFilters.direction = e.target.value; txPage = 1; renderTransactions(); });
-  document.getElementById('tf-from').addEventListener('change', (e) => { txFilters.from = e.target.value; txPage = 1; renderTransactions(); });
-  document.getElementById('tf-to').addEventListener('change', (e) => { txFilters.to = e.target.value; txPage = 1; renderTransactions(); });
+  const pickDate = (key, title) => openJalaliDatePicker({
+    title,
+    value: txFilters[key],
+    onChange: (iso) => { txFilters[key] = iso; txPage = 1; renderTransactions(); },
+  });
+  document.getElementById('tf-from').addEventListener('click', () => pickDate('from', 'از تاریخ'));
+  document.getElementById('tf-to').addEventListener('click', () => pickDate('to', 'تا تاریخ'));
+  document.querySelectorAll('[data-range]').forEach((b) => b.addEventListener('click', () => {
+    const { from, to } = txDateRanges()[b.dataset.range];
+    Object.assign(txFilters, { from, to });
+    txPage = 1;
+    renderTransactions();
+  }));
   document.getElementById('tf-clear').addEventListener('click', () => {
     txFilters = { account_id: '', category_id: '', direction: '', from: '', to: '' };
     txPage = 1;
@@ -2920,7 +3073,7 @@ async function renderDebts() {
       </select>
       <input id="d-person" placeholder="نام شخص" />
       <input id="d-amount" type="text" inputmode="numeric" placeholder="مبلغ (ریال)" />
-      <input id="d-due" type="date" placeholder="سررسید (اختیاری)" />
+      ${dateFieldHtml('d-due', 'سررسید (اختیاری)', '')}
       <input id="d-note" placeholder="توضیح (اختیاری)" />
       <button class="action" id="d-add">ثبت</button>
     </div>
@@ -2931,6 +3084,7 @@ async function renderDebts() {
   `;
 
   wireThousandsInput('d-amount');
+  wireDateField('d-due', 'سررسید');
 
   onClickLocked(document.getElementById('d-add'), async () => {
     const person_name = document.getElementById('d-person').value;
@@ -2942,7 +3096,7 @@ async function renderDebts() {
         type: document.getElementById('d-type').value,
         person_name,
         amount_rial: amountToman,
-        due_date: document.getElementById('d-due').value || null,
+        due_date: document.getElementById('d-due-value').value || null,
         note: document.getElementById('d-note').value || null,
       }),
     });
@@ -2973,9 +3127,12 @@ function openDebtEditModal(debt) {
   manualModal.innerHTML = `
     <div class="card">
       <strong>ویرایش بدهی/طلب</strong>
+      <div class="muted" style="margin-top:8px">نام شخص</div>
       <input id="ed-person" placeholder="نام شخص" value="${debt.person_name}" />
+      <div class="muted" style="margin-top:8px">مبلغ (ریال)</div>
       <input id="ed-amount" type="text" inputmode="numeric" value="${toman(debt.amount_rial)}" />
-      <input id="ed-due" type="date" value="${debt.due_date ? debt.due_date.slice(0, 10) : ''}" />
+      ${dateFieldHtml('ed-due', 'سررسید', debt.due_date ? dateToLocalIso(new Date(debt.due_date)) : '')}
+      <div class="muted" style="margin-top:8px">توضیح (اختیاری)</div>
       <input id="ed-note" placeholder="توضیح (اختیاری)" value="${debt.note || ''}" />
       <button class="action" id="ed-save">ذخیره</button>
       <button class="action secondary" id="ed-cancel">انصراف</button>
@@ -2983,6 +3140,7 @@ function openDebtEditModal(debt) {
   `;
   manualModal.hidden = false;
   wireThousandsInput('ed-amount');
+  wireDateField('ed-due', 'سررسید');
   document.getElementById('ed-cancel').addEventListener('click', () => { manualModal.hidden = true; });
   onClickLocked(document.getElementById('ed-save'), async () => {
     await api(`/debts/${debt.id}`, {
@@ -2990,7 +3148,7 @@ function openDebtEditModal(debt) {
       body: JSON.stringify({
         person_name: document.getElementById('ed-person').value,
         amount_rial: numFromInput('ed-amount'),
-        due_date: document.getElementById('ed-due').value || null,
+        due_date: document.getElementById('ed-due-value').value || null,
         note: document.getElementById('ed-note').value || null,
       }),
     });
