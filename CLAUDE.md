@@ -21,7 +21,7 @@ Distilled from [emilkowalski/skills](https://github.com/emilkowalski/skills) (MI
 - Spatial consistency: a sheet enters from the bottom and leaves to the bottom. Popovers originate from their trigger (`transform-origin`); modals stay centered.
 - Prefer CSS transitions (interruptible) over `@keyframes` for anything that can be re-triggered. Use `@starting-style` for enter and `display … allow-discrete` for exit on `[hidden]` elements, so no JS timers are needed and old browsers fall back to instant.
 - This is a finance app: crisp, no bounce. Overshoot only after a physical gesture (a flick) or a rare celebration.
-- Continuous/looping motion (the login coin) must be time-based (`performance.now()`), not per-frame increments, so 120Hz screens don't run it twice as fast.
+- Continuous/looping motion must be time-based (`performance.now()`), not per-frame increments, so 120Hz screens don't run it twice as fast.
 - If drag gestures are ever added: Pointer Events + `setPointerCapture`, follow the finger 1:1 respecting the grab offset, ~10px threshold before committing a direction, hand release velocity to the settle animation, project momentum to pick the snap point, rubber-band at edges instead of a hard stop, and let the user grab it mid-animation.
 
 ### Touch & mobile (PWA)

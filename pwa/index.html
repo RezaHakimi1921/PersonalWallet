@@ -448,6 +448,9 @@
   .otp-card.show-secured .otp-secured { opacity: 1; }
   .otp-back { margin-top: 14px; }
 
+  .link-btn { background: none; border: none; padding: 6px 0 0; color: var(--blue); font-family: inherit; font-size: .8rem; cursor: pointer; }
+  .settings-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
+
   /* Add-account flow: bank picker and SMS setup guide. */
   .bank-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
   .bank-tile {
@@ -518,6 +521,17 @@
   .ios-minus { width: 16px; height: 16px; border-radius: 50%; background: #ff453a; display: grid; place-items: center; font-size: 12px; line-height: 1; flex: 0 0 auto; }
   .ios-plus { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: #30d158; color: #fff; font-size: 13px; font-weight: 700; line-height: 1; margin-right: 6px; }
   .ios-add { justify-content: flex-start; color: #8e8e93; }
+  .ios-section { font-weight: 700; font-size: 13px; margin: 8px 2px 6px; }
+  .ios-tile { border-radius: 14px; padding: 10px; min-height: 58px; display: flex; flex-direction: column; justify-content: flex-end; font-weight: 600; font-size: 11.5px; margin-bottom: 8px; }
+  .ios-tile-gray { width: 48%; background: linear-gradient(160deg, #636366, #48484a); color: #d1d1d6; }
+  .ios-tile-icon { font-size: 15px; margin-bottom: 6px; }
+  .ios-tiles { display: flex; gap: 6px; }
+  .ios-tiles .ios-tile { flex: 1; }
+  .ios-tile-purple { background: linear-gradient(160deg, #bf5af2, #9b59d0); }
+  .ios-tile-blue { background: linear-gradient(160deg, #409cff, #2f6fe0); }
+  .ios-search-bottom { margin-top: 18px; border-radius: 999px; }
+  .ios-sheet { margin-top: 40px; padding: 8px; border-radius: 16px; background: #2c2c2e; }
+  .ios-sheet .ios-search { background: #3a3a3c; }
   .ios-var { color: #0a84ff; background: rgba(10,132,255,.14); border-radius: 6px; padding: 1px 6px; font-size: 11.5px; }
   /* The element to tap on this step. */
   .ios-hl { position: relative; outline: 2px solid #ffd60a; outline-offset: 2px; border-radius: 10px; animation: ios-hl-pulse 1.6s var(--ease-in-out) infinite; }
@@ -557,7 +571,6 @@
 <body>
   <div id="auth-screen" hidden style="position:fixed;inset:0;z-index:100;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px">
     <div class="card" style="width:100%;max-width:360px;margin:0">
-      <canvas id="coin-canvas" width="140" height="140" style="display:block;margin:0 auto 4px;width:140px;height:140px"></canvas>
       <h1 style="text-align:center">کیف پول شخصی</h1>
       <div id="auth-form"></div>
     </div>

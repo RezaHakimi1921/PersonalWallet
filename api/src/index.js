@@ -132,6 +132,10 @@ async function migrateAuth() {
   );
   for (const u of emptyUsers.rows) await seedDefaultCategories(pool, u.id);
 
+  // The Jalali month an income counts toward ('1405-06'), when it differs from the month
+  // it arrived in -- e.g. Shahrivar's salary landing on 2 Mehr. NULL = the arrival month.
+  await pool.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS income_month TEXT`);
+
   // Which bank an account belongs to (picks the SMS parser and logo). bank_code stays the
   // account's unique webhook key; the three original accounts used the bank name as that key.
   await pool.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS bank TEXT`);
@@ -192,12 +196,15 @@ function fmt(n) {
 }
 
 // ---------- Auth helpers ----------
-function signToken(userId) {
-  const payload = Buffer.from(JSON.stringify({ userId, iat: Date.now() })).toString('base64url');
+// `via` records how the session was opened ('password' | 'google'): a fresh Google
+// sign-in may set a new password without the old one (the forgot-password path).
+function signToken(userId, via = 'password') {
+  const payload = Buffer.from(JSON.stringify({ userId, iat: Date.now(), via })).toString('base64url');
   const sig = crypto.createHmac('sha256', AUTH_SECRET).update(payload).digest('base64url');
   return `${payload}.${sig}`;
 }
 
+// Returns the token's { userId, iat, via }, or null if it's missing or forged.
 function verifyToken(token) {
   if (!token || typeof token !== 'string') return null;
   const [payload, sig] = token.split('.');
@@ -207,7 +214,8 @@ function verifyToken(token) {
   const expBuf = Buffer.from(expectedSig);
   if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return null;
   try {
-    return JSON.parse(Buffer.from(payload, 'base64url').toString()).userId;
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    return data.userId ? data : null;
   } catch {
     return null;
   }
@@ -243,9 +251,10 @@ function requireAuth(req, res, next) {
       .catch((err) => { console.error(err); res.status(500).json({ error: 'internal error' }); });
     return;
   }
-  const userId = verifyToken(parseCookies(req).session);
-  if (!userId) return res.status(401).json({ error: 'unauthorized' });
-  req.userId = userId;
+  const session = verifyToken(parseCookies(req).session);
+  if (!session) return res.status(401).json({ error: 'unauthorized' });
+  req.userId = session.userId;
+  req.session = session;
   next();
 }
 
@@ -336,12 +345,51 @@ app.post('/auth/google', async (req, res) => {
       await seedDefaultCategories(pool, result.rows[0].id);
     }
     const user = result.rows[0];
-    res.cookie('session', signToken(user.id), COOKIE_OPTS);
+    res.cookie('session', signToken(user.id, 'google'), COOKIE_OPTS);
     res.json({ ok: true });
   } catch (err) {
     console.error('google auth error', err);
     res.status(401).json({ error: 'اعتبارسنجی گوگل ناموفق بود' });
   }
+});
+
+// Links a Google account to the signed-in account, so a forgotten password can later
+// be bypassed by signing in with Google (which otherwise makes a new, empty account).
+app.post('/auth/google/link', requireAuth, async (req, res) => {
+  if (!googleClient) return res.status(400).json({ error: 'ورود با گوگل هنوز فعال نشده' });
+  const { credential } = req.body || {};
+  if (!credential) return res.status(400).json({ error: 'credential is required' });
+  let payload;
+  try {
+    const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: process.env.GOOGLE_CLIENT_ID });
+    payload = ticket.getPayload();
+  } catch (err) {
+    console.error('google link error', err);
+    return res.status(401).json({ error: 'اعتبارسنجی گوگل ناموفق بود' });
+  }
+  const owner = await pool.query('SELECT id FROM users WHERE google_id = $1', [payload.sub]);
+  if (owner.rows.length > 0 && owner.rows[0].id !== req.userId) {
+    return res.status(409).json({ error: 'این حساب گوگل قبلاً به یه حساب دیگه وصل شده' });
+  }
+  await pool.query('UPDATE users SET google_id = $1, email = COALESCE(email, $2) WHERE id = $3', [payload.sub, payload.email, req.userId]);
+  res.json({ ok: true, email: payload.email });
+});
+
+// Set a new password. Needs the current one -- unless the session is a Google sign-in
+// from the last 15 minutes, which is how someone who forgot their password gets back in.
+const GOOGLE_RESET_WINDOW_MS = 15 * 60 * 1000;
+const isFreshGoogleSession = (req) => req.session?.via === 'google' && Date.now() - req.session.iat < GOOGLE_RESET_WINDOW_MS;
+app.put('/auth/me/password', requireAuth, async (req, res) => {
+  const { current_password, new_password } = req.body || {};
+  if (!new_password || new_password.length < 6) return res.status(400).json({ error: 'رمز جدید باید حداقل ۶ کاراکتر باشه' });
+  const user = (await pool.query('SELECT password_hash FROM users WHERE id = $1', [req.userId])).rows[0];
+  if (user.password_hash && !isFreshGoogleSession(req)) {
+    if (!current_password || !(await bcrypt.compare(current_password, user.password_hash))) {
+      return res.status(401).json({ error: 'رمز فعلی اشتباهه' });
+    }
+  }
+  await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [await bcrypt.hash(new_password, 10), req.userId]);
+  res.json({ ok: true });
 });
 
 app.post('/auth/request-otp', async (req, res) => {
@@ -426,9 +474,12 @@ app.post('/auth/logout', (req, res) => {
 });
 
 app.get('/auth/me', requireAuth, async (req, res) => {
-  const result = await pool.query('SELECT id, phone, email, username, api_key, ntfy_topic FROM users WHERE id = $1', [req.userId]);
+  const result = await pool.query(
+    'SELECT id, phone, email, username, api_key, ntfy_topic, google_id IS NOT NULL AS google_linked, password_hash IS NOT NULL AS has_password FROM users WHERE id = $1',
+    [req.userId]
+  );
   if (result.rows.length === 0) return res.status(401).json({ error: 'unauthorized' });
-  res.json(result.rows[0]);
+  res.json({ ...result.rows[0], can_reset_password: isFreshGoogleSession(req) });
 });
 
 app.put('/auth/me/ntfy-topic', requireAuth, async (req, res) => {
@@ -648,8 +699,14 @@ app.get('/transactions/trash', requireAuth, async (req, res) => {
 });
 
 // Manual entry: for when the automatic SMS webhook doesn't fire.
+// 'YYYY-MM' (Jalali) or null. Only incomes carry one.
+function incomeMonthFor(direction, value) {
+  if (direction !== 'income' || !value) return null;
+  return /^1[34]\d\d-(0[1-9]|1[0-2])$/.test(value) ? value : null;
+}
+
 app.post('/transactions/manual', requireAuth, async (req, res) => {
-  const { account_id, amount_rial, direction, category_id, note, tags } = req.body || {};
+  const { account_id, amount_rial, direction, category_id, note, tags, income_month } = req.body || {};
   if (!account_id || !amount_rial || !['expense', 'income'].includes(direction)) {
     return res.status(400).json({ error: 'account_id, amount_rial and direction are required' });
   }
@@ -666,9 +723,9 @@ app.post('/transactions/manual', requireAuth, async (req, res) => {
     checkLowBalance(account_id);
 
     const txRes = await client.query(
-      `INSERT INTO transactions (account_id, amount_rial, direction, balance_after_rial, raw_text, status, category_id, note, tags, user_id)
-       VALUES ($1, $2, $3, $4, 'manual entry', 'confirmed', $5, $6, $7, $8) RETURNING *`,
-      [account_id, amount_rial, direction, newBalance, category_id || null, note || null, tags || null, req.userId]
+      `INSERT INTO transactions (account_id, amount_rial, direction, balance_after_rial, raw_text, status, category_id, note, tags, user_id, income_month)
+       VALUES ($1, $2, $3, $4, 'manual entry', 'confirmed', $5, $6, $7, $8, $9) RETURNING *`,
+      [account_id, amount_rial, direction, newBalance, category_id || null, note || null, tags || null, req.userId, incomeMonthFor(direction, income_month)]
     );
     const tx = txRes.rows[0];
 
@@ -760,7 +817,7 @@ app.post('/transactions/:id/restore', requireAuth, async (req, res) => {
 // reconciling the account balance(s) for the change.
 app.put('/transactions/:id/edit', requireAuth, async (req, res) => {
   const { id } = req.params;
-  const { amount_rial, direction, account_id, category_id, note, tags } = req.body || {};
+  const { amount_rial, direction, account_id, category_id, note, tags, income_month } = req.body || {};
   const client = await pool.connect();
   try {
     const txRes = await client.query('SELECT * FROM transactions WHERE id = $1 AND user_id = $2', [id, req.userId]);
@@ -793,10 +850,13 @@ app.put('/transactions/:id/edit', requireAuth, async (req, res) => {
     await client.query('UPDATE accounts SET balance_rial = $1 WHERE id = $2', [newBalance, newAccountId]);
     checkLowBalance(newAccountId);
 
+    // income_month: kept as-is unless sent; cleared if the transaction became an expense.
+    const newIncomeMonth = newDirection !== 'income' ? null
+      : income_month !== undefined ? incomeMonthFor('income', income_month) : tx.income_month;
     const result = await client.query(
-      `UPDATE transactions SET amount_rial = $1, direction = $2, account_id = $3, category_id = $4, note = COALESCE($5, note), balance_after_rial = $6, tags = COALESCE($7, tags)
+      `UPDATE transactions SET amount_rial = $1, direction = $2, account_id = $3, category_id = $4, note = COALESCE($5, note), balance_after_rial = $6, tags = COALESCE($7, tags), income_month = $9
        WHERE id = $8 RETURNING *`,
-      [newAmount, newDirection, newAccountId, category_id ?? tx.category_id, note ?? null, newBalance, tags ?? null, id]
+      [newAmount, newDirection, newAccountId, category_id ?? tx.category_id, note ?? null, newBalance, tags ?? null, id, newIncomeMonth]
     );
     res.json(result.rows[0]);
   } catch (err) {
@@ -809,10 +869,12 @@ app.put('/transactions/:id/edit', requireAuth, async (req, res) => {
 
 app.post('/transactions/:id/confirm', requireAuth, async (req, res) => {
   const { id } = req.params;
-  const { category_id, note, tags } = req.body || {};
+  const { category_id, note, tags, income_month } = req.body || {};
   const result = await pool.query(
-    `UPDATE transactions SET category_id = $1, note = $2, status = 'confirmed', tags = COALESCE($3, tags) WHERE id = $4 AND user_id = $5 RETURNING *`,
-    [category_id || null, note || null, tags || null, id, req.userId]
+    `UPDATE transactions SET category_id = $1, note = $2, status = 'confirmed', tags = COALESCE($3, tags),
+       income_month = CASE WHEN direction = 'income' THEN $6 ELSE NULL END
+     WHERE id = $4 AND user_id = $5 RETURNING *`,
+    [category_id || null, note || null, tags || null, id, req.userId, incomeMonthFor('income', income_month)]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
   res.json(result.rows[0]);

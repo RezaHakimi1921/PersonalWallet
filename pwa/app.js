@@ -275,7 +275,6 @@ const appRoot = document.getElementById('app-root');
 function showApp() {
   authScreen.hidden = true;
   appRoot.hidden = false;
-  pauseGoldCoin();
 }
 
 function showAuthScreen(mode) {
@@ -283,136 +282,109 @@ function showAuthScreen(mode) {
   appRoot.hidden = true;
   authScreen.hidden = false;
   renderAuthForm(mode || 'login');
-  initGoldCoin();
-}
-
-// A small decorative rotating 3D gold coin above the login/register card.
-// Lazy-loads Three.js (only needed on this screen) and pauses its render loop
-// whenever the auth screen isn't visible, so it costs nothing once logged in.
-let threeJsLoadPromise = null;
-function loadThreeJs() {
-  if (!threeJsLoadPromise) {
-    threeJsLoadPromise = new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-      script.onload = resolve;
-      script.onerror = reject;
-      document.head.appendChild(script);
-    });
-  }
-  return threeJsLoadPromise;
-}
-
-let coinInitStarted = false;
-let coinAnimFrame = null;
-let coinTick = null;
-
-function pauseGoldCoin() {
-  if (coinAnimFrame != null) { cancelAnimationFrame(coinAnimFrame); coinAnimFrame = null; }
-}
-
-async function initGoldCoin() {
-  if (coinInitStarted) { if (coinTick && coinAnimFrame == null) coinTick(); return; }
-  coinInitStarted = true;
-  const canvas = document.getElementById('coin-canvas');
-  try {
-    await loadThreeJs();
-  } catch (e) {
-    canvas.style.display = 'none';
-    return;
-  }
-  if (!window.THREE) { canvas.style.display = 'none'; return; }
-
-  const size = 140;
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
-  camera.position.set(0, 0.5, 5.2);
-  camera.lookAt(0, 0, 0);
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-  renderer.setSize(size, size, false);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-
-  const gold = new THREE.MeshStandardMaterial({ color: 0xf5b942, metalness: 0.85, roughness: 0.28, emissive: 0x3a2400, emissiveIntensity: 0.12 });
-  const goldDark = new THREE.MeshStandardMaterial({ color: 0xb45309, metalness: 0.85, roughness: 0.35 });
-
-  const coinGroup = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 0.22, 64), gold);
-  body.rotation.x = Math.PI / 2;
-  coinGroup.add(body);
-
-  const rimFront = new THREE.Mesh(new THREE.TorusGeometry(1.42, 0.055, 12, 64), goldDark);
-  coinGroup.add(rimFront);
-  const rimBack = rimFront.clone();
-  coinGroup.add(rimBack);
-
-  const emblemFront = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 0.85, 0.05, 48), goldDark);
-  emblemFront.rotation.x = Math.PI / 2;
-  emblemFront.position.z = 0.135;
-  coinGroup.add(emblemFront);
-  const emblemBack = emblemFront.clone();
-  emblemBack.position.z = -0.135;
-  coinGroup.add(emblemBack);
-
-  scene.add(coinGroup);
-  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-  const key = new THREE.DirectionalLight(0xffffff, 1.1);
-  key.position.set(3, 4, 5);
-  scene.add(key);
-  const fill = new THREE.DirectionalLight(0xfff4d6, 0.6);
-  fill.position.set(-4, -2, 2);
-  scene.add(fill);
-
-  // Time-based so the spin speed is the same on 60Hz and 120Hz screens.
-  coinTick = () => {
-    const now = performance.now();
-    coinGroup.rotation.y = (now / 1000) * 0.84;
-    coinGroup.rotation.x = Math.sin(now / 2200) * 0.12;
-    renderer.render(scene, camera);
-    coinAnimFrame = requestAnimationFrame(coinTick);
-  };
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    coinGroup.rotation.set(0.12, 0.5, 0);
-    renderer.render(scene, camera);
-    coinTick = () => {};
-  } else {
-    coinTick();
-  }
 }
 
 // Renders the "یا با گوگل وارد شو" divider + button into #google-btn-slot, if the
 // server has a GOOGLE_CLIENT_ID configured. Google's script posts an ID token to
 // our callback, which we forward to the backend for verification -- the frontend
 // never checks the token itself.
-function renderGoogleButton(config) {
-  const slot = document.getElementById('google-btn-slot');
-  if (!slot || !config.google_client_id || !window.google?.accounts?.id) return;
+// Renders a Google button into `slotId` (only when the server has a GOOGLE_CLIENT_ID).
+// Google's script hands us an ID token, which the backend verifies -- the frontend never
+// trusts it. `endpoint` is /auth/google (sign in) or /auth/google/link (link to this account).
+function renderGoogleButton(config, { slotId = 'google-btn-slot', endpoint = '/auth/google', errorElId = 'auth-error', divider = true, onSuccess = bootstrapApp } = {}) {
+  const slot = document.getElementById(slotId);
+  if (!slot || !config.google_client_id || !window.google?.accounts?.id) return false;
   slot.innerHTML = `
-    <div class="row" style="margin-top:14px;gap:10px">
+    ${divider ? `<div class="row" style="margin-top:14px;gap:10px">
       <div style="flex:1;height:1px;background:var(--border-soft)"></div>
       <span class="muted" style="font-size:.7rem">یا</span>
       <div style="flex:1;height:1px;background:var(--border-soft)"></div>
-    </div>
-    <div id="google-btn-target" style="margin-top:10px;display:flex;justify-content:center"></div>
+    </div>` : ''}
+    <div class="google-btn-target" style="margin-top:10px;display:flex;justify-content:center"></div>
   `;
   window.google.accounts.id.initialize({
     client_id: config.google_client_id,
     callback: async (response) => {
-      const errorEl = document.getElementById('auth-error');
+      const errorEl = document.getElementById(errorElId);
       try {
-        const res = await fetch(`${API}/auth/google`, {
+        const res = await fetch(`${API}${endpoint}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ credential: response.credential }),
         });
         const data = await res.json();
         if (!res.ok) { if (errorEl) errorEl.textContent = data.error || 'ورود با گوگل ناموفق بود'; return; }
-        await bootstrapApp();
+        await onSuccess(data);
       } catch (e) {
         if (errorEl) errorEl.textContent = 'اتصال برقرار نشد';
       }
     },
   });
-  window.google.accounts.id.renderButton(document.getElementById('google-btn-target'), { theme: 'filled_black', size: 'large', width: 280 });
+  window.google.accounts.id.renderButton(slot.querySelector('.google-btn-target'), { theme: 'filled_black', size: 'large', width: 280 });
+  return true;
+}
+
+// Forgot password: signing in with a Google account that was linked beforehand opens the
+// same account, and right after that the app asks for a new password.
+function renderForgotPassword(config) {
+  authForm.innerHTML = `
+    <strong>رمزت رو فراموش کردی؟</strong>
+    <p class="muted" style="font-size:.8rem;line-height:1.9;margin:8px 0 0">
+      اگه قبلاً از «حساب کاربری ← اتصال به گوگل» حساب گوگلت رو وصل کرده باشی، با دکمه‌ی زیر وارد شو.
+      بعد از ورود، همون‌جا یه رمز جدید می‌ذاری.
+    </p>
+    <div id="forgot-google-slot"></div>
+    <div id="auth-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
+    <div class="tour-alt">اگه حساب گوگلت رو وصل نکرده بودی، ورود با گوگل یه حساب <b>جدید و خالی</b> می‌سازه و به اطلاعات قبلیت نمی‌رسه.</div>
+    <button class="action secondary" id="forgot-back">برگشت به ورود</button>
+  `;
+  const shown = renderGoogleButton(config, {
+    slotId: 'forgot-google-slot',
+    divider: false,
+    onSuccess: async () => { await bootstrapApp(); if (currentUser?.can_reset_password) openPasswordModal(); },
+  });
+  if (!shown) {
+    document.getElementById('forgot-google-slot').innerHTML = '<p class="muted" style="font-size:.8rem">ورود با گوگل هنوز فعال نشده.</p>';
+  }
+  document.getElementById('forgot-back').addEventListener('click', () => renderAuthForm('login'));
+}
+
+// Change password. The current password isn't asked for right after a Google sign-in
+// (that's the forgot-password path) or when the account has none yet (Google-only).
+function openPasswordModal() {
+  const needsCurrent = currentUser.has_password && !currentUser.can_reset_password;
+  manualModal.innerHTML = `
+    <div class="card">
+      <strong>${currentUser.has_password ? 'تغییر رمز عبور' : 'گذاشتن رمز عبور'}</strong>
+      ${needsCurrent ? `<div class="muted" style="margin-top:8px">رمز فعلی</div><input id="pw-current" type="password" autocomplete="current-password" />` : ''}
+      <div class="muted" style="margin-top:8px">رمز جدید (حداقل ۶ کاراکتر)</div>
+      <input id="pw-new" type="password" autocomplete="new-password" />
+      <div class="muted" style="margin-top:8px">تکرار رمز جدید</div>
+      <input id="pw-repeat" type="password" autocomplete="new-password" />
+      <div id="pw-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
+      <button class="action" id="pw-save">ذخیره‌ی رمز</button>
+      <button class="action secondary" id="pw-cancel">انصراف</button>
+    </div>
+  `;
+  manualModal.hidden = false;
+  document.getElementById('pw-cancel').addEventListener('click', () => { manualModal.hidden = true; });
+  onClickLocked(document.getElementById('pw-save'), async () => {
+    const errorEl = document.getElementById('pw-error');
+    const newPassword = document.getElementById('pw-new').value;
+    if (newPassword.length < 6) { errorEl.textContent = 'رمز جدید باید حداقل ۶ کاراکتر باشه'; return; }
+    if (newPassword !== document.getElementById('pw-repeat').value) { errorEl.textContent = 'تکرار رمز با خودش یکی نیست'; return; }
+    const res = await fetch(`${API}/auth/me/password`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: document.getElementById('pw-current')?.value, new_password: newPassword }),
+    });
+    const data = await res.json();
+    if (!res.ok) { errorEl.textContent = data.error || 'ذخیره نشد'; return; }
+    currentUser.has_password = true;
+    currentUser.can_reset_password = false;
+    manualModal.innerHTML = '<div class="card"><strong>✓ رمز جدید ذخیره شد</strong><button class="action" id="pw-ok">باشه</button></div>';
+    document.getElementById('pw-ok').addEventListener('click', () => { manualModal.hidden = true; });
+  });
 }
 
 function renderAuthForm(mode) {
@@ -424,12 +396,14 @@ function renderAuthForm(mode) {
       authForm.innerHTML = `
         <input id="auth-phone" placeholder="شماره موبایل یا نام کاربری" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" dir="ltr" style="text-align:right" />
         <input id="auth-password" type="password" placeholder="رمز عبور" autocomplete="current-password" />
+        <button type="button" class="link-btn" id="auth-forgot">رمزت رو فراموش کردی؟</button>
         <div id="auth-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
         <button class="action" id="auth-submit">ورود</button>
         <button class="action secondary" id="auth-toggle">حساب نداری؟ ثبت‌نام کن</button>
         <div id="google-btn-slot"></div>
       `;
       document.getElementById('auth-toggle').addEventListener('click', () => renderAuthForm('register'));
+      document.getElementById('auth-forgot').addEventListener('click', () => renderForgotPassword(config));
       onClickLocked(document.getElementById('auth-submit'), async () => {
         const phone = document.getElementById('auth-phone').value.trim();
         const password = document.getElementById('auth-password').value;
@@ -764,7 +738,19 @@ function openAccountSettingsModal() {
       <div class="muted" style="margin-top:8px;font-size:.8rem">${currentUser.phone ? 'شماره موبایل' : currentUser.email ? 'ایمیل' : 'نام کاربری'}</div>
       <div class="font-num">${currentUser.phone || currentUser.email || currentUser.username || ''}</div>
 
-      <div class="muted" style="margin-top:12px;font-size:.8rem">آدرس کلی وب‌هوک پیامک (برای اتوماسیون‌های قدیمی که فیلد bank دارن). برای حساب‌های جدید، از «حساب‌ها ← 📲 اتصال پیامک» آدرس اختصاصی هر حساب رو بگیر.</div>
+      <div class="settings-section">
+        <strong>رمز عبور</strong>
+        <button class="action secondary" id="acc-password">${currentUser.has_password ? 'تغییر رمز' : 'گذاشتن رمز'}</button>
+      </div>
+
+      <div class="settings-section">
+        <strong>ورود با گوگل</strong>
+        <div class="muted" style="font-size:.78rem;margin-top:4px;line-height:1.8">اگه حساب گوگلت رو وصل کنی، هر وقت رمزت یادت رفت با گوگل وارد می‌شی و رمز جدید می‌ذاری.</div>
+        <div id="acc-google-status" style="margin-top:8px"></div>
+        <div id="acc-google-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
+      </div>
+
+      <div class="muted" style="margin-top:12px;font-size:.8rem">آدرس قدیمی دریافت پیامک (فقط برای اتوماسیون‌هایی که قبلاً ساختی). برای حساب‌های جدید از «حساب‌ها ← 📲 اتصال پیامک» استفاده کن.</div>
       <textarea readonly class="sms-text" style="min-height:50px;font-size:.7rem" id="acc-webhook-url">${webhookUrl}</textarea>
       <button class="action secondary" id="acc-copy-webhook">کپی آدرس</button>
 
@@ -777,6 +763,26 @@ function openAccountSettingsModal() {
     </div>
   `;
   manualModal.hidden = false;
+  document.getElementById('acc-password').addEventListener('click', openPasswordModal);
+  const googleStatus = document.getElementById('acc-google-status');
+  if (currentUser.google_linked) {
+    googleStatus.innerHTML = `<span style="color:var(--green)">✓ وصل شده${currentUser.email ? ` (${currentUser.email})` : ''}</span>`;
+  } else {
+    fetch(`${API}/auth/config`).then((r) => r.json()).then((config) => {
+      const shown = renderGoogleButton(config, {
+        slotId: 'acc-google-status',
+        endpoint: '/auth/google/link',
+        errorElId: 'acc-google-error',
+        divider: false,
+        onSuccess: async (data) => {
+          currentUser.google_linked = true;
+          currentUser.email = currentUser.email || data.email;
+          googleStatus.innerHTML = `<span style="color:var(--green)">✓ وصل شد${data.email ? ` (${data.email})` : ''}</span>`;
+        },
+      });
+      if (!shown) googleStatus.innerHTML = '<span class="muted" style="font-size:.8rem">ورود با گوگل هنوز فعال نشده.</span>';
+    }).catch(() => {});
+  }
   document.getElementById('acc-cancel').addEventListener('click', () => { manualModal.hidden = true; });
   document.getElementById('acc-copy-webhook').addEventListener('click', () => {
     navigator.clipboard?.writeText(webhookUrl);
@@ -955,17 +961,18 @@ async function renderOverview() {
   const totalOwedToMe = openDebts.filter((d) => d.type === 'owed_to_me').reduce((s, d) => s + Number(d.amount_rial), 0);
   const now = new Date();
   const nowJ = Jalali.toJalaali(now.getFullYear(), now.getMonth() + 1, now.getDate());
-  const monthLabel = `${JALALI_MONTH_NAMES[nowJ.jm - 1]} ${nowJ.jy}`;
-  const thisMonthTx = transactions.filter((t) => {
-    if (t.status !== 'confirmed') return false;
-    const d = new Date(t.created_at);
-    const j = Jalali.toJalaali(d.getFullYear(), d.getMonth() + 1, d.getDate());
-    return j.jy === nowJ.jy && j.jm === nowJ.jm;
-  });
+  const curMonth = { jy: nowJ.jy, jm: nowJ.jm };
+  const prevMonth = shiftJalaliMonth(nowJ.jy, nowJ.jm, -1);
+  const monthLabel = (m) => `${JALALI_MONTH_NAMES[m.jm - 1]} ${m.jy}`;
   // Transfers between own accounts are neither real income nor real expense.
-  const realFlowTx = thisMonthTx.filter((t) => !isNonFlowCategory(t.category_name));
-  const monthExpense = realFlowTx.filter((t) => t.direction === 'expense').reduce((s, t) => s + Number(t.amount_rial), 0);
-  const monthIncome = realFlowTx.filter((t) => t.direction === 'income').reduce((s, t) => s + Number(t.amount_rial), 0);
+  const confirmedFlow = transactions.filter((t) => t.status === 'confirmed' && !isNonFlowCategory(t.category_name));
+  const flowIn = (m) => confirmedFlow.filter((t) => monthKey(flowMonthOf(t)) === monthKey(m));
+  const realFlowTx = flowIn(curMonth);
+  const prevIncomeTx = flowIn(prevMonth).filter((t) => t.direction === 'income');
+  const sum = (txs) => txs.reduce((s, t) => s + Number(t.amount_rial), 0);
+  const monthExpense = sum(realFlowTx.filter((t) => t.direction === 'expense'));
+  const monthIncome = sum(realFlowTx.filter((t) => t.direction === 'income'));
+  const prevMonthIncome = sum(prevIncomeTx);
 
   const expenseByCategory = {};
   realFlowTx.filter((t) => t.direction === 'expense' && t.category_id).forEach((t) => {
@@ -1022,6 +1029,10 @@ async function renderOverview() {
         <div class="row"><span class="muted" style="font-size:.75rem">درآمد ${JALALI_MONTH_NAMES[nowJ.jm - 1]}</span> <span class="muted" style="font-size:.7rem">جزئیات ‹</span></div>
         <div class="privacy-target font-num" style="color:var(--green);font-weight:800;font-size:1.1rem;margin-top:4px">+${toman(monthIncome)} <span class="muted" style="font-size:.65rem">ریال</span></div>
         <div class="mini-bar"><div class="mini-bar-fill" style="width:${Math.round(monthIncome / maxFlow * 100)}%;background:var(--green)"></div></div>
+        <div class="row muted" style="font-size:.7rem;margin-top:8px">
+          <span>${JALALI_MONTH_NAMES[prevMonth.jm - 1]}</span>
+          <span class="font-num privacy-target">+${toman(prevMonthIncome)}</span>
+        </div>
       </button>
     </div>
   `;
@@ -1097,12 +1108,17 @@ async function renderOverview() {
   document.getElementById('goto-installments')?.addEventListener('click', () => setActiveTab('installments'));
   document.querySelectorAll('[data-month-flow]').forEach((b) => b.addEventListener('click', () => {
     const direction = b.dataset.monthFlow;
-    openMonthFlowModal(direction, realFlowTx.filter((t) => t.direction === direction), monthLabel);
+    openMonthFlowModal(direction, [curMonth, prevMonth].map((m) => ({
+      label: monthLabel(m),
+      txs: flowIn(m).filter((t) => t.direction === direction),
+    })));
   }));
 }
 
-// The dashboard's month income/expense, broken down: per-category totals, then every transaction.
-function openMonthFlowModal(direction, txs, monthLabel) {
+// The dashboard's month income/expense, broken down: per-category totals, then every
+// transaction. `months` = [{ label, txs }] (current month first), shown as tabs.
+function openMonthFlowModal(direction, months, index = 0) {
+  const { label: monthLabel, txs } = months[index];
   const isExpense = direction === 'expense';
   const color = isExpense ? 'var(--red)' : 'var(--green)';
   const total = txs.reduce((s, t) => s + Number(t.amount_rial), 0);
@@ -1117,6 +1133,10 @@ function openMonthFlowModal(direction, txs, monthLabel) {
         <strong>${isExpense ? 'هزینه‌های' : 'درآمدهای'} ${monthLabel}</strong>
         <span class="muted">${txs.length} تراکنش</span>
       </div>
+      ${months.length > 1 ? `
+        <div class="seg" role="tablist" style="margin-top:10px">
+          ${months.map((m, i) => `<button role="tab" data-flow-month="${i}" class="${i === index ? 'active' : ''}">${m.label}</button>`).join('')}
+        </div>` : ''}
       <div class="privacy-target font-num" style="color:${color};font-weight:800;font-size:1.3rem;margin-top:6px">${isExpense ? '-' : '+'}${toman(total)} <span class="muted" style="font-size:.7rem">ریال</span></div>
       ${txs.length === 0 ? `<p class="muted">این ماه ${isExpense ? 'هزینه‌ای' : 'درآمدی'} ثبت نشده.</p>` : `
         <div class="muted" style="margin-top:12px">به تفکیک دسته</div>
@@ -1132,7 +1152,7 @@ function openMonthFlowModal(direction, txs, monthLabel) {
             <div class="row flow-item">
               <div style="min-width:0">
                 <div style="font-size:.8rem">${t.category_name || 'بدون دسته'}${t.note ? ` <span class="muted">· ${t.note}</span>` : ''}</div>
-                <div class="muted font-num" style="font-size:.7rem">${formatJalaliDateTime(new Date(t.created_at))} · ${t.account_name}</div>
+                <div class="muted font-num" style="font-size:.7rem">${t.income_month ? 'واریز: ' : ''}${formatJalaliDateTime(new Date(t.created_at))} · ${t.account_name}</div>
               </div>
               <span class="font-num privacy-target" style="color:${color};font-size:.8rem;flex-shrink:0">${toman(t.amount_rial)}</span>
             </div>`).join('')}
@@ -1143,6 +1163,9 @@ function openMonthFlowModal(direction, txs, monthLabel) {
   `;
   manualModal.hidden = false;
   document.getElementById('flow-close').addEventListener('click', () => { manualModal.hidden = true; });
+  manualModal.querySelectorAll('[data-flow-month]').forEach((b) => b.addEventListener('click', () => {
+    openMonthFlowModal(direction, months, Number(b.dataset.flowMonth));
+  }));
 }
 
 // Suggest a category from transaction history: for a given direction+amount, pick
@@ -1199,6 +1222,45 @@ async function renderPending() {
   const histogram = buildAmountCategoryHistogram(allTxs);
   content.innerHTML = txs.map((t) => txCard(t, cats, true, accounts)).join('');
   txs.forEach((t) => wireTxCard(t, cats, accounts, debts, histogram, installments));
+}
+
+// The Jalali month a transaction counts toward: an income can be assigned to another
+// month (Shahrivar's salary landing on 2 Mehr); everything else uses its arrival date.
+function flowMonthOf(t) {
+  if (t.direction === 'income' && t.income_month) {
+    const [jy, jm] = t.income_month.split('-').map(Number);
+    return { jy, jm };
+  }
+  const d = new Date(t.created_at);
+  const j = Jalali.toJalaali(d.getFullYear(), d.getMonth() + 1, d.getDate());
+  return { jy: j.jy, jm: j.jm };
+}
+const monthKey = ({ jy, jm }) => `${jy}-${String(jm).padStart(2, '0')}`;
+
+// «درآمد کدوم ماهه؟» — only shown for incomes. Offers the arrival month and the two before it.
+function incomeMonthFieldHtml(idSuffix, arrivalDate, selected) {
+  const a = Jalali.toJalaali(arrivalDate.getFullYear(), arrivalDate.getMonth() + 1, arrivalDate.getDate());
+  const months = [0, -1, -2].map((d) => shiftJalaliMonth(a.jy, a.jm, d));
+  const current = selected || monthKey(months[0]);
+  if (!months.some((m) => monthKey(m) === current)) {
+    const [jy, jm] = current.split('-').map(Number);
+    months.push({ jy, jm });
+  }
+  return `<div id="income-month-wrap-${idSuffix}" hidden>
+    <div class="muted" style="margin-top:8px">این درآمد مال کدوم ماهه؟</div>
+    <select id="income-month-${idSuffix}">
+      ${months.map((m, i) => `<option value="${monthKey(m)}" ${monthKey(m) === current ? 'selected' : ''}>${JALALI_MONTH_NAMES[m.jm - 1]} ${m.jy}${i === 0 ? ' (ماهی که واریز شد)' : ''}</option>`).join('')}
+    </select>
+  </div>`;
+}
+function wireIncomeMonthField(idSuffix, getDirection) {
+  const wrap = document.getElementById(`income-month-wrap-${idSuffix}`);
+  const update = () => { wrap.hidden = getDirection() !== 'income'; };
+  update();
+  return update;
+}
+function incomeMonthValue(idSuffix, direction) {
+  return direction === 'income' ? document.getElementById(`income-month-${idSuffix}`)?.value || null : null;
 }
 
 const TRANSFER_CATEGORY_NAME = 'انتقال وجه بین حساب';
@@ -1572,6 +1634,7 @@ async function openEditTxModal(t) {
       ${repayFieldHtml('e')}
       ${bankLoanFieldHtml('e')}
       ${installmentFieldHtml('e')}
+      ${incomeMonthFieldHtml('e', new Date(t.created_at), t.income_month)}
       <input id="e-note" placeholder="توضیح" value="${t.note || ''}" />
       <input id="e-tags" placeholder="تگ (با کاما جدا کن)" value="${t.tags || ''}" />
       <button class="action" id="e-save">ذخیره</button>
@@ -1584,11 +1647,13 @@ async function openEditTxModal(t) {
   const updateRepayE = wireRepayField('e-category', () => document.getElementById('e-direction').value, 'repay-debt-e', cats, debts);
   const updateLoanE = wireLoanField('e-category', 'e', cats, debts, () => document.getElementById('e-direction').value);
   const updateInstallmentE = wireInstallmentField('e-category', 'e', cats, installments, 'e-amount');
+  const updateIncomeMonthE = wireIncomeMonthField('e', () => document.getElementById('e-direction').value);
   document.getElementById('e-direction').addEventListener('change', (e) => {
     document.getElementById('e-category').innerHTML = renderCatOptions(e.target.value);
     updateRepayE();
     updateLoanE();
     updateInstallmentE();
+    updateIncomeMonthE();
   });
   wireBankLoanField('e-category', 'bank-loan-e', cats);
   document.getElementById('e-cancel').addEventListener('click', () => { manualModal.hidden = true; });
@@ -1607,6 +1672,7 @@ async function openEditTxModal(t) {
         category_id: document.getElementById('e-category').value || null,
         note: document.getElementById('e-note').value || null,
         tags: document.getElementById('e-tags').value || null,
+        income_month: incomeMonthValue('e', document.getElementById('e-direction').value),
       }),
     });
     manualModal.hidden = true;
@@ -1636,6 +1702,7 @@ function txCard(t, cats, editable, accounts) {
         ${repayFieldHtml(t.id)}
         ${bankLoanFieldHtml(t.id)}
         ${installmentFieldHtml(t.id)}
+        ${incomeMonthFieldHtml(t.id, new Date(t.created_at), t.income_month)}
         <input id="note-${t.id}" placeholder="توضیح (اختیاری)" />
         <input id="tags-${t.id}" placeholder="تگ (مثلا سفر، کار — با کاما جدا کن)" />
         <div class="row" style="gap:8px">
@@ -1656,6 +1723,7 @@ function wireTxCard(t, cats, accounts, debts, histogram, installments) {
   wireRepayField(`cat-${t.id}`, () => t.direction, `repay-debt-${t.id}`, cats, debts || []);
   wireBankLoanField(`cat-${t.id}`, `bank-loan-${t.id}`, cats);
   wireInstallmentField(`cat-${t.id}`, t.id, cats, installments || [], `amount-${t.id}`);
+  wireIncomeMonthField(t.id, () => t.direction);
   if (histogram) wireCategorySuggestion(`amount-${t.id}`, `cat-${t.id}`, () => t.direction, histogram)();
   onClickLocked(btn, async () => {
     const category_id = document.getElementById(`cat-${t.id}`).value || null;
@@ -1678,7 +1746,10 @@ function wireTxCard(t, cats, accounts, debts, histogram, installments) {
     await maybeRepayDebt(`repay-debt-${t.id}`, amount_rial);
     await maybeCreateLoanInstallment(t.id, account?.display_name || '', amount_rial);
     await maybeMarkInstallmentPaid(t.id);
-    await api(`/transactions/${t.id}/confirm`, { method: 'POST', body: JSON.stringify({ category_id, note, tags }) });
+    await api(`/transactions/${t.id}/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ category_id, note, tags, income_month: incomeMonthValue(t.id, t.direction) }),
+    });
     document.getElementById(`tx-${t.id}`).remove();
   });
   document.getElementById(`delete-${t.id}`).addEventListener('click', () => {
@@ -2053,16 +2124,20 @@ function iosMockScreen(screen, hl, ctx) {
   if (screen === 'do') {
     return `${statusBar}
       <div class="ios-toolbar"><span class="ios-circle">‹</span><span></span></div>
-      <div class="ios-title">Do</div>
-      <div class="ios-cell ios-card${mark('create')}"><span class="ios-blue">＋ Create New Shortcut</span><span></span></div>
-      <div class="ios-muted-block">My Shortcuts</div>`;
+      <div class="ios-title">${ctx.triggerTitle}</div>
+      <div class="ios-section">💡 Get Started <span class="ios-dim">›</span></div>
+      <div class="ios-tile ios-tile-gray${mark('create')}"><span class="ios-tile-icon">⧉＋</span>Create New Shortcut</div>
+      <div class="ios-section">My Shortcuts <span class="ios-dim">›</span></div>
+      <div class="ios-tiles"><div class="ios-tile ios-tile-purple">Show Folder…</div><div class="ios-tile ios-tile-blue">…</div></div>
+      <div class="ios-search ios-search-bottom">🔍 <span class="ios-dim">Search</span></div>`;
   }
   if (screen === 'search') {
     return `${statusBar}
-      <div class="ios-search">🔍 <span>Get Contents</span></div>
-      <div class="ios-group">
+      <div class="ios-toolbar"><span class="ios-circle">‹</span><span class="ios-nav-title">${ctx.triggerTitle}</span><span class="ios-circle ios-done">✓</span></div>
+      <div class="ios-action"><span class="ios-blue">⤓</span> Receive messages as input</div>
+      <div class="ios-sheet">
+        <div class="ios-search${mark('search')}">🔍 <span>Get Contents of URL</span></div>
         <div class="ios-cell${mark('action')}"><span><span class="ios-app-icon">⤓</span> Get Contents of URL</span><span></span></div>
-        <div class="ios-cell ios-dim"><span><span class="ios-app-icon ios-app-icon-dim">⤓</span> Get Contents of Web Page</span><span></span></div>
       </div>`;
   }
   // 'editor': the shortcut, built up step by step (ctx.stage: how far the fields are filled in).
@@ -2086,33 +2161,38 @@ function iosMockScreen(screen, hl, ctx) {
     </div>`;
 }
 
+// Plain language on purpose: the only English words are the labels printed on the iPhone
+// screen, so people can match them by eye.
 function iosTourSteps(ctx) {
   const copy = (label, value) => ({ label, value });
+  const containsHint = ctx.accountNumber
+    ? copy('شماره حساب', ctx.accountNumber)
+    : ctx.last4 ? copy('۴ رقم آخر کارت', ctx.last4) : null;
   return [
-    { screen: 'automation-tab', hl: 'plus', text: 'اپ <b>Shortcuts</b> (میان‌برها) رو باز کن، برو تب <b>Automation</b> و دکمه‌ی <b>＋</b> بالای صفحه رو بزن.' },
-    { screen: 'triggers', hl: 'message', text: 'از لیست، <b>Message</b> رو انتخاب کن.' },
+    { screen: 'automation-tab', hl: 'plus', text: 'اپ <b>Shortcuts</b> (میان‌برها) رو باز کن. پایین صفحه <b>Automation</b> رو بزن، بعد دکمه‌ی <b>＋</b> بالای صفحه.' },
+    { screen: 'triggers', hl: 'message', text: 'از لیست، <b>Message</b> (پیام) رو انتخاب کن.' },
     {
       screen: 'when', hl: 'sender', key: 'sender',
-      text: `روی <b>Sender</b> بزن و فرستنده‌ی پیامک‌های <b>${ctx.bankName}</b> رو انتخاب کن. اگه توی لیست نبود، اول شماره‌ای که پیامک‌های بانک ازش میاد رو با اسم «${ctx.bankName}» توی مخاطب‌ها ذخیره کن.`
-        + (ctx.last4 ? `<div class="tour-alt">راه دیگه: به‌جای Sender، توی <b>Message Contains</b> چهار رقم آخر کارتت رو بنویس — اگه بانکت اون رو توی پیامک می‌نویسه.</div>` : ''),
-      copies: ctx.last4 ? [copy('۴ رقم آخر کارت', ctx.last4)] : [],
+      text: `روی <b>Sender</b> بزن و فرستنده‌ی پیامک‌های <b>${ctx.bankName}</b> رو انتخاب کن. اگه توی لیست نبود، اول شماره‌ای که پیامک‌های بانک ازش میاد رو با اسم «${ctx.bankName}» توی مخاطب‌های گوشی ذخیره کن.`
+        + `<div class="tour-alt"><b>اگه پیامک‌های بانکت از یه شماره‌ی ثابت نمیاد</b> (مثل رسالت): به‌جای Sender، روی <b>Message Contains</b> بزن و ${containsHint ? containsHint.label : 'شماره حسابت'} رو بنویس. این عدد توی متن همه‌ی پیامک‌های همین حساب هست، پس فقط پیامک‌های همین حساب فرستاده می‌شن.</div>`,
+      copies: containsHint ? [containsHint] : [],
     },
-    { screen: 'when', hl: 'run', text: '<b>Run Immediately</b> رو انتخاب کن تا هر بار ازت تأیید نخواد. بعد <b>Next</b> رو بزن.' },
-    { screen: 'do', hl: 'create', text: '<b>Create New Shortcut</b> رو بزن.' },
-    { screen: 'search', hl: 'action', text: 'توی جستجوی اکشن‌ها بنویس <b>Get Contents of URL</b> و انتخابش کن.', copies: [copy('اسم اکشن', 'Get Contents of URL')] },
-    { screen: 'editor', hl: 'url', stage: 1, text: 'روی <b>URL</b> آبی بزن و آدرس اختصاصی این حساب رو Paste کن.', copies: [copy('آدرس', ctx.url)] },
-    { screen: 'editor', hl: 'method', stage: 2, text: 'روی فلش <b>⌄</b> کنار آدرس بزن تا تنظیمات باز بشه. <b>Method</b> رو <b>POST</b> کن.' },
+    { screen: 'when', hl: 'run', text: '<b>Run Immediately</b> رو انتخاب کن تا هر بار ازت اجازه نگیره. بعد بالای صفحه <b>Next</b> رو بزن.' },
+    { screen: 'do', hl: 'create', text: 'توی صفحه‌ی بعد، کادر خاکستری <b>Create New Shortcut</b> رو بزن.' },
+    { screen: 'search', hl: 'search', text: 'پایین صفحه توی کادر جستجو (<b>Search Actions</b>) بنویس <b>Get Contents of URL</b> و از نتیجه‌ها همون رو انتخاب کن.', copies: [copy('برای جستجو', 'Get Contents of URL')] },
+    { screen: 'editor', hl: 'url', stage: 1, text: 'روی نوشته‌ی آبی <b>URL</b> بزن و آدرس این حساب رو اونجا بچسبون.', copies: [copy('آدرس این حساب', ctx.url)] },
+    { screen: 'editor', hl: 'method', stage: 2, text: 'روی فلش کوچیک <b>⌄</b> کنار آدرس بزن تا بقیه‌ی گزینه‌ها باز بشن. جلوی <b>Method</b> رو بذار روی <b>POST</b>.' },
     {
       screen: 'editor', hl: 'header', stage: 3,
-      text: 'توی <b>Headers</b>، <b>Add new header</b> رو بزن و این دو تا رو بنویس.',
-      copies: [copy('کلید (Key)', 'Content-Type'), copy('مقدار (Value)', 'application/json')],
+      text: 'زیر <b>Headers</b>، دکمه‌ی سبز <b>Add new header</b> رو بزن. توی خونه‌ی اول و دوم این دو تا رو بنویس:',
+      copies: [copy('خونه‌ی اول', 'Content-Type'), copy('خونه‌ی دوم', 'application/json')],
     },
     {
       screen: 'editor', hl: 'body', stage: 4,
-      text: '<b>Request Body</b> رو <b>JSON</b> کن، بعد <b>Add new field</b> ← <b>Text</b>. کلید رو <code dir="ltr">text</code> بنویس و برای مقدار، از نوار بالای کیبورد <b>Shortcut Input</b> رو انتخاب کن.',
-      copies: [copy('کلید (Key)', 'text')],
+      text: 'جلوی <b>Request Body</b> رو بذار روی <b>JSON</b>. بعد <b>Add new field</b> ← <b>Text</b> رو بزن. توی خونه‌ی اول بنویس <code dir="ltr">text</code>؛ خونه‌ی دوم رو بزن و از نوار بالای کیبورد <b>Shortcut Input</b> رو انتخاب کن.',
+      copies: [copy('خونه‌ی اول', 'text')],
     },
-    { screen: 'editor', hl: 'done', stage: 4, text: 'دکمه‌ی <b>✓</b> آبی بالا رو بزن. تمومه! از این به بعد هر پیامک این بانک خودکار ثبت می‌شه. برای اطمینان، پایین همین صفحه «ارسال پیامک آزمایشی» رو بزن.' },
+    { screen: 'editor', hl: 'done', stage: 4, text: 'دکمه‌ی آبی <b>✓</b> بالای صفحه رو بزن. تمومه! از این به بعد هر پیامک این حساب خودکار توی برنامه ثبت می‌شه. برای مطمئن شدن، پایین همین صفحه «ارسال پیامک آزمایشی» رو بزن.' },
   ];
 }
 
@@ -2158,8 +2238,8 @@ function openSmsSetupModal(account, { justCreated = false } = {}) {
       </div>
       <div class="sms-status ${bank?.sms_tested ? 'ok' : ''}">
         ${bank?.sms_tested
-          ? '✓ فرمت پیامک‌های این بانک رو دقیق می‌شناسیم.'
-          : 'پیامک‌های این بانک با تشخیص خودکار خونده می‌شه. اگه یکی تشخیص داده نشد، توی «تحلیل ← کیفیت داده» میاد؛ یه نمونه‌اش رو بفرست تا دقیقش کنیم.'}
+          ? '✓ پیامک‌های این بانک رو کامل می‌شناسیم.'
+          : 'پیامک‌های این بانک معمولاً درست خونده می‌شن. اگه یکی خونده نشد، توی صفحه‌ی «تحلیل» نشونت می‌دیم؛ یه نمونه‌اش رو برامون بفرست تا درستش کنیم.'}
       </div>
 
       <div class="muted" style="margin-top:12px">آدرس اختصاصی این حساب</div>
@@ -2173,14 +2253,14 @@ function openSmsSetupModal(account, { justCreated = false } = {}) {
       <div class="ios-tour" data-steps="ios"></div>
 
       <ol class="steps" data-steps="android" hidden>
-        <li>اپ رایگان و متن‌باز <b>SMS to URL Forwarder</b> رو از <b>F-Droid</b> یا صفحه‌ی Releases گیت‌هابش نصب کن. توی گوگل‌پلی نیست و هشدار Play Protect براش طبیعیه (Install anyway).</li>
-        <li>بازش کن و اجازه‌ی دریافت پیامک و نوتیفیکیشن رو بده.</li>
-        <li>یه قانون جدید (<b>+</b>) بساز. توی <b>Sender</b>، شماره یا اسم فرستنده‌ی پیامک‌های ${bank?.name || 'بانک'} رو دقیقاً همون‌طور که توی پیام‌ها می‌بینی بنویس.</li>
-        <li>توی <b>URL</b>، آدرس بالا رو Paste کن.</li>
-        <li>قالب پیام (JSON template) رو این بذار:${copyBox('sms-android-template', androidTemplate)}</li>
-        <li>برای اینکه رمز پویا و کد تأیید اصلاً فرستاده نشن، توی <b>Text filter</b> اینو بذار:${copyBox('sms-android-filter', androidFilter)}</li>
+        <li>اپ رایگان <b>SMS to URL Forwarder</b> رو نصب کن (از <b>F-Droid</b>؛ توی گوگل‌پلی نیست). اگه گوشی هشدار داد، <b>Install anyway</b> رو بزن — این هشدار برای این نوع اپ طبیعیه.</li>
+        <li>اپ رو باز کن و اجازه‌ی خوندن پیامک و نمایش اعلان رو بهش بده.</li>
+        <li>دکمه‌ی <b>+</b> رو بزن. توی <b>Sender</b> شماره یا اسم فرستنده‌ی پیامک‌های ${bank?.name || 'بانک'} رو دقیقاً همون‌طور که توی پیام‌هات می‌بینی بنویس.</li>
+        <li>توی <b>URL</b>، آدرس این حساب (بالای همین صفحه) رو بچسبون.</li>
+        <li>توی کادر متن پیام (<b>JSON template</b>) اینو بچسبون:${copyBox('sms-android-template', androidTemplate)}</li>
+        <li>برای اینکه رمز پویا و کد تأیید اصلاً فرستاده نشن، توی <b>Text filter</b> اینو بچسبون:${copyBox('sms-android-filter', androidFilter)}</li>
         <li>ذخیره کن و دکمه‌ی <b>Test</b> رو بزن.</li>
-        <li>توی تنظیمات باتری گوشی، محدودیت باتری این اپ رو بردار (مخصوصاً شیائومی و سامسونگ)، وگرنه ممکنه پیامک‌ها دیر یا اصلاً فرستاده نشن. اگه Google Messages داری، <b>RCS chats</b> رو خاموش کن.</li>
+        <li>از تنظیمات گوشی، محدودیت باتری این اپ رو بردار (مخصوصاً شیائومی و سامسونگ)، وگرنه ممکنه پیامک‌ها دیر برسن. اگه از اپ Google Messages استفاده می‌کنی، توی تنظیماتش <b>RCS chats</b> رو خاموش کن.</li>
       </ol>
 
       <div class="muted" style="font-size:.75rem;margin-top:10px">🔒 پیامک‌های رمز پویا و کد تأیید روی سرور خودکار کنار گذاشته می‌شن و ذخیره نمی‌شن.</div>
@@ -2199,10 +2279,13 @@ function openSmsSetupModal(account, { justCreated = false } = {}) {
   showPlatform(detectPhonePlatform());
 
   const last4 = String(account.card_number || '').replace(/\D/g, '').slice(-4);
+  const bankName = bank?.name || account.display_name;
   renderIosTour(manualModal.querySelector('.ios-tour'), {
     url: webhookUrl,
-    bankName: bank?.name || account.display_name,
-    senderLabel: bank?.name || account.display_name,
+    bankName,
+    senderLabel: bankName,
+    triggerTitle: `When I Get a Message From ${bankName}`,
+    accountNumber: account.account_number || null,
     last4: last4.length === 4 ? last4 : null,
   });
 
@@ -2827,7 +2910,7 @@ async function renderAnalytics() {
   const last6 = [];
   for (let i = 5; i >= 0; i--) {
     const { jy, jm } = shiftJalaliMonth(nowJalali.jy, nowJalali.jm, -i);
-    const monthTxs = confirmed.filter((t) => inJalaliYM(new Date(t.created_at), jy, jm));
+    const monthTxs = confirmed.filter((t) => monthKey(flowMonthOf(t)) === monthKey({ jy, jm }));
     const exp = monthTxs.filter((t) => t.direction === 'expense').reduce((s, t) => s + Number(t.amount_rial), 0);
     const inc = monthTxs.filter((t) => t.direction === 'income').reduce((s, t) => s + Number(t.amount_rial), 0);
     last6.push({ jy, jm, exp, inc, net: inc - exp });
@@ -3452,6 +3535,7 @@ async function openManualModal() {
       ${repayFieldHtml('m')}
       ${bankLoanFieldHtml('m')}
       ${installmentFieldHtml('m')}
+      ${incomeMonthFieldHtml('m', new Date(), null)}
       <input id="m-note" placeholder="توضیح (اختیاری)" />
       <input id="m-tags" placeholder="تگ (اختیاری، با کاما جدا کن)" />
       <button class="action" id="m-save">ثبت</button>
@@ -3465,12 +3549,14 @@ async function openManualModal() {
   const applySuggestionM = wireCategorySuggestion('m-amount', 'm-category', () => document.getElementById('m-direction').value, histogram);
   const updateLoanM = wireLoanField('m-category', 'm', cats, debts, () => document.getElementById('m-direction').value);
   const updateInstallmentM = wireInstallmentField('m-category', 'm', cats, installments, 'm-amount');
+  const updateIncomeMonthM = wireIncomeMonthField('m', () => document.getElementById('m-direction').value);
   document.getElementById('m-direction').addEventListener('change', (e) => {
     document.getElementById('m-category').innerHTML = renderCatOptions(e.target.value);
     updateRepayM();
     applySuggestionM();
     updateLoanM();
     updateInstallmentM();
+    updateIncomeMonthM();
   });
   wireTransferField('m-category', 'other-account-m', cats);
   wireBankLoanField('m-category', 'bank-loan-m', cats);
@@ -3495,7 +3581,7 @@ async function openManualModal() {
     await maybeMarkInstallmentPaid('m');
     await api('/transactions/manual', {
       method: 'POST',
-      body: JSON.stringify({ account_id, amount_rial: amountToman, direction, category_id, note, tags }),
+      body: JSON.stringify({ account_id, amount_rial: amountToman, direction, category_id, note, tags, income_month: incomeMonthValue('m', direction) }),
     });
     manualModal.hidden = true;
     const activeTab = [...tabButtons].find((b) => b.classList.contains('active'))?.dataset.tab;
