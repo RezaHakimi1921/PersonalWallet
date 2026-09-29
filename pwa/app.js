@@ -353,7 +353,7 @@ function renderAuthForm(mode) {
   fetch(`${API}/auth/config`).then((r) => r.json()).catch(() => ({ otp_enabled: false, google_client_id: null })).then((config) => {
     if (isLogin) {
       authForm.innerHTML = `
-        <input id="auth-phone" placeholder="شماره موبایل (09xxxxxxxxx)" inputmode="tel" autocomplete="tel" />
+        <input id="auth-phone" placeholder="شماره موبایل یا نام کاربری" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" dir="ltr" style="text-align:right" />
         <input id="auth-password" type="password" placeholder="رمز عبور" autocomplete="current-password" />
         <div id="auth-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
         <button class="action" id="auth-submit">ورود</button>
@@ -366,7 +366,7 @@ function renderAuthForm(mode) {
         const password = document.getElementById('auth-password').value;
         const errorEl = document.getElementById('auth-error');
         errorEl.textContent = '';
-        if (!phone || !password) { errorEl.textContent = 'شماره موبایل و رمز عبور رو وارد کن'; return; }
+        if (!phone || !password) { errorEl.textContent = 'شماره موبایل (یا نام کاربری) و رمز عبور رو وارد کن'; return; }
         try {
           const res = await fetch(`${API}/auth/login`, {
             method: 'POST',
@@ -1888,10 +1888,45 @@ function openInstallmentModal(item) {
   });
 }
 
+// Filled from /investments/assets on each render of the investments tab.
+let investmentAssets = [];
+const ASSET_GROUP_LABELS = { coin: 'سکه', gold: 'طلا', currency: 'ارز', crypto: 'رمزارز' };
+const LEGACY_ASSET_UNITS = { gold: 'گرم', coin: 'عدد', dollar: 'دلار' };
+
+function assetOptionsHtml(selected, { includeOther = true } = {}) {
+  const groups = Object.entries(ASSET_GROUP_LABELS).map(([group, label]) => {
+    const opts = investmentAssets
+      .filter((a) => a.group === group)
+      .map((a) => `<option value="${a.symbol}" ${a.symbol === selected ? 'selected' : ''}>${a.name}</option>`)
+      .join('');
+    return opts ? `<optgroup label="${label}">${opts}</optgroup>` : '';
+  }).join('');
+  return groups + (includeOther ? `<option value="other" ${selected === 'other' ? 'selected' : ''}>سایر (مبلغ کلی، بدون قیمت بازار)</option>` : '');
+}
+
+function assetForInvestment(v) {
+  const found = investmentAssets.find((a) => a.symbol === v.symbol);
+  if (found) return found;
+  return LEGACY_ASSET_UNITS[v.asset_type] ? { name: null, unit: LEGACY_ASSET_UNITS[v.asset_type] } : null;
+}
+
+// Quantities can be fractional (0.5 coin, 12.3 grams) and may be typed with Persian digits.
+function decimalFromInput(id) {
+  const raw = (document.getElementById(id).value || '')
+    .replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
+    .replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
+    .replace(/[٫/]/g, '.')
+    .replace(/,/g, '');
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 async function renderInvestments() {
-  const [items, accounts, installments, debts] = await Promise.all([
+  const [items, accounts, installments, debts, assets] = await Promise.all([
     api('/investments'), api('/accounts'), api('/installments'), api('/debts'),
+    api('/investments/assets').catch(() => []),
   ]);
+  investmentAssets = assets;
   const totalInvested = items.reduce((s, v) => s + Number(v.invested_amount_rial), 0);
   const totalCurrent = items.reduce((s, v) => s + Number(v.current_value_rial), 0);
   const totalGain = totalCurrent - totalInvested;
@@ -1921,32 +1956,40 @@ async function renderInvestments() {
         <div class="metric-value privacy-target font-num">${toman(totalCurrent)}</div>
       </div>
     </div>
-    <button class="action secondary" id="refresh-prices">🔄 بروزرسانی خودکار قیمت دلار/طلا/سکه</button>
+    <button class="action secondary" id="refresh-prices">🔄 بروزرسانی قیمت‌ها از بازار</button>
     <div class="card">
       <strong>افزودن سرمایه‌گذاری</strong>
-      <input id="v-title" placeholder="عنوان (مثلا: طلای 18 عیار)" />
-      <select id="v-type">
-        <option value="gold">طلا (بر اساس گرم)</option>
-        <option value="coin">سکه (بر اساس تعداد)</option>
-        <option value="dollar">دلار (بر اساس تعداد)</option>
-        <option value="other">سایر (مبلغ کلی)</option>
-      </select>
+      <div class="muted" style="margin-top:8px">نوع دارایی</div>
+      <select id="v-asset">${assetOptionsHtml(assets[0]?.symbol || 'other')}</select>
       <div id="v-qty-fields">
-        <input id="v-qty" type="text" inputmode="decimal" placeholder="مقدار (مثلا 0.98 گرم)" />
-        <input id="v-unit-price" type="text" inputmode="numeric" placeholder="قیمت هر واحد هنگام خرید (ریال)" />
+        <div class="muted" style="margin-top:8px" id="v-qty-label">مقدار</div>
+        <input id="v-qty" type="text" inputmode="decimal" placeholder="مثلا 2 یا 0.5" />
+        <div class="muted" style="margin-top:8px">قیمت خرید هر واحد (ریال)</div>
+        <input id="v-unit-price" type="text" inputmode="numeric" placeholder="خالی بذاری، قیمت امروز بازار ثبت می‌شه" />
+        <div class="muted" id="v-live-price" style="margin-top:6px"></div>
       </div>
-      <input id="v-amount" type="text" inputmode="numeric" placeholder="مبلغ کل سرمایه‌گذاری‌شده (ریال)" hidden />
+      <div class="muted" style="margin-top:8px">عنوان</div>
+      <input id="v-title" placeholder="اختیاری — مثلا «سکه‌های عروسی»" />
+      <div id="v-amount-wrap" hidden>
+        <div class="muted" style="margin-top:8px">مبلغ کل سرمایه‌گذاری‌شده (ریال)</div>
+        <input id="v-amount" type="text" inputmode="numeric" placeholder="مثلا 50,000,000" />
+      </div>
+      <div id="v-error" style="color:var(--red);font-size:.8rem;margin-top:6px"></div>
       <button class="action" id="v-add">افزودن</button>
     </div>
   ` + (items.length === 0 ? '<p class="muted">سرمایه‌گذاری ثبت نشده.</p>' : items.map((v) => {
     const gainPercent = v.invested_amount_rial > 0
       ? Math.round(((v.current_value_rial - v.invested_amount_rial) / v.invested_amount_rial) * 100)
       : 0;
-    const unitLabel = { gold: 'گرم', coin: 'عدد', dollar: 'دلار' }[v.asset_type] || null;
+    const asset = assetForInvestment(v);
+    const unitLabel = v.quantity != null ? (asset?.unit || 'واحد') : null;
     return `
     <div class="card">
       <div class="row">
-        <strong>${v.title}</strong>
+        <div style="min-width:0">
+          <strong>${v.title}</strong>
+          ${asset && asset.name !== v.title ? `<div class="muted" style="font-size:.7rem">${asset.name}</div>` : ''}
+        </div>
         <div class="row" style="width:auto;gap:6px">
           <span class="badge ${gainPercent >= 0 ? 'gain' : 'loss'}">${gainPercent >= 0 ? '+' : ''}${gainPercent}%</span>
           <button data-edit-inv="${v.id}" class="action secondary" style="width:auto;padding:4px 8px;font-size:.7rem">✎</button>
@@ -1984,29 +2027,38 @@ async function renderInvestments() {
     renderInvestments();
   });
 
-  const vType = document.getElementById('v-type');
-  const vQtyFields = document.getElementById('v-qty-fields');
-  const vAmount = document.getElementById('v-amount');
-  vType.addEventListener('change', () => {
-    const isOther = vType.value === 'other';
-    vQtyFields.hidden = isOther;
-    vAmount.hidden = !isOther;
-  });
+  const vAsset = document.getElementById('v-asset');
+  const syncAssetFields = () => {
+    const isOther = vAsset.value === 'other';
+    const asset = assets.find((a) => a.symbol === vAsset.value);
+    document.getElementById('v-qty-fields').hidden = isOther;
+    document.getElementById('v-amount-wrap').hidden = !isOther;
+    document.getElementById('v-title').placeholder = isOther ? 'مثلا «سهام» یا «صندوق درآمد ثابت»' : 'اختیاری — مثلا «سکه‌های عروسی»';
+    if (!asset) return;
+    document.getElementById('v-qty-label').textContent = `مقدار (${asset.unit})`;
+    document.getElementById('v-live-price').textContent = asset.unit_price_rial
+      ? `قیمت امروز بازار: ${toman(asset.unit_price_rial)} ریال برای هر ${asset.unit}`
+      : 'قیمت بازار الان در دسترس نیست — قیمت خرید رو دستی وارد کن';
+  };
+  vAsset.addEventListener('change', syncAssetFields);
+  syncAssetFields();
 
   onClickLocked(document.getElementById('v-add'), async () => {
-    const title = document.getElementById('v-title').value;
-    const asset_type = vType.value;
-    if (!title) return;
+    const title = document.getElementById('v-title').value.trim();
+    const errorEl = document.getElementById('v-error');
+    errorEl.textContent = '';
     let body;
-    if (asset_type === 'other') {
-      const amountToman = numFromInput('v-amount');
-      if (!amountToman) return;
-      body = { title, asset_type, invested_amount_rial: amountToman };
+    if (vAsset.value === 'other') {
+      const amount = numFromInput('v-amount');
+      if (!title || !amount) { errorEl.textContent = 'عنوان و مبلغ رو وارد کن'; return; }
+      body = { title, asset_type: 'other', invested_amount_rial: amount };
     } else {
-      const quantity = Number(document.getElementById('v-qty').value);
-      const unitPriceToman = numFromInput('v-unit-price');
-      if (!quantity || !unitPriceToman) return;
-      body = { title, asset_type, quantity, purchase_unit_price_rial: unitPriceToman };
+      const quantity = decimalFromInput('v-qty');
+      const unitPrice = numFromInput('v-unit-price');
+      const asset = assets.find((a) => a.symbol === vAsset.value);
+      if (!quantity) { errorEl.textContent = 'مقدار رو وارد کن'; return; }
+      if (!unitPrice && !asset?.unit_price_rial) { errorEl.textContent = 'قیمت خرید هر واحد رو وارد کن'; return; }
+      body = { title: title || undefined, symbol: vAsset.value, quantity, purchase_unit_price_rial: unitPrice || undefined };
     }
     await api('/investments', { method: 'POST', body: JSON.stringify(body) });
     renderInvestments();
@@ -2039,37 +2091,68 @@ async function renderInvestments() {
 }
 
 function openInvestmentModal(item) {
-  const unitLabel = { gold: 'گرم', coin: 'عدد', dollar: 'دلار' }[item.asset_type] || null;
+  const isQuantityBased = item.quantity != null;
+  const selected = item.symbol || '';
   manualModal.innerHTML = `
     <div class="card">
       <strong>ویرایش سرمایه‌گذاری</strong>
+      <div class="muted" style="margin-top:8px">عنوان</div>
       <input id="inv-title" placeholder="عنوان" value="${item.title}" />
-      ${unitLabel ? `
-        <div class="grid2">
-          <input id="inv-qty" type="text" inputmode="decimal" placeholder="مقدار (${unitLabel})" value="${item.quantity}" />
-          <input id="inv-purchase-price" type="text" inputmode="numeric" placeholder="قیمت خرید هر واحد (ریال)" value="${toman(item.purchase_unit_price_rial)}" />
+      ${isQuantityBased ? `
+        <div class="muted" style="margin-top:8px">نوع دارایی (قیمت بازار از روی این خونده می‌شه)</div>
+        <select id="inv-asset">
+          ${selected ? '' : '<option value="" selected>انتخاب نشده</option>'}
+          ${assetOptionsHtml(selected, { includeOther: false })}
+        </select>
+        <div class="grid2" style="margin-top:8px">
+          <div class="muted" id="inv-qty-label">مقدار</div>
+          <div class="muted">قیمت خرید هر واحد (ریال)</div>
         </div>
-      ` : ''}
-      <input id="inv-invested" type="text" inputmode="numeric" placeholder="مبلغ اولیه (ریال)" value="${toman(item.invested_amount_rial)}" />
+        <div class="grid2">
+          <input id="inv-qty" type="text" inputmode="decimal" placeholder="مقدار" value="${Number(item.quantity)}" />
+          <input id="inv-purchase-price" type="text" inputmode="numeric" placeholder="قیمت خرید" value="${toman(item.purchase_unit_price_rial || 0)}" />
+        </div>
+        <div class="muted" style="margin-top:6px">مبلغ اولیه خودکار حساب می‌شه: مقدار × قیمت خرید</div>
+      ` : `
+        <div class="muted" style="margin-top:8px">مبلغ اولیه (ریال)</div>
+        <input id="inv-invested" type="text" inputmode="numeric" placeholder="مبلغ اولیه (ریال)" value="${toman(item.invested_amount_rial)}" />
+      `}
       <button class="action" id="inv-save">ذخیره</button>
       <button class="action secondary" id="inv-cancel">انصراف</button>
     </div>
   `;
   manualModal.hidden = false;
-  if (unitLabel) wireThousandsInput('inv-purchase-price');
-  wireThousandsInput('inv-invested');
+
+  if (isQuantityBased) {
+    wireThousandsInput('inv-purchase-price');
+    const assetSelect = document.getElementById('inv-asset');
+    const syncUnit = () => {
+      const asset = investmentAssets.find((a) => a.symbol === assetSelect.value) || assetForInvestment(item);
+      document.getElementById('inv-qty-label').textContent = `مقدار${asset?.unit ? ` (${asset.unit})` : ''}`;
+    };
+    assetSelect.addEventListener('change', () => {
+      syncUnit();
+      // The old purchase price belongs to the previous asset; start from today's price for the new one.
+      const asset = investmentAssets.find((a) => a.symbol === assetSelect.value);
+      if (asset?.unit_price_rial) document.getElementById('inv-purchase-price').value = toman(asset.unit_price_rial);
+    });
+    syncUnit();
+  } else {
+    wireThousandsInput('inv-invested');
+  }
 
   document.getElementById('inv-cancel').addEventListener('click', () => { manualModal.hidden = true; });
   onClickLocked(document.getElementById('inv-save'), async () => {
-    const title = document.getElementById('inv-title').value;
+    const title = document.getElementById('inv-title').value.trim();
     if (!title) return;
-    const body = {
-      title,
-      invested_amount_rial: numFromInput('inv-invested'),
-    };
-    if (unitLabel) {
-      body.quantity = Number(document.getElementById('inv-qty').value) || null;
-      body.purchase_unit_price_rial = numFromInput('inv-purchase-price');
+    const body = { title };
+    if (isQuantityBased) {
+      body.quantity = decimalFromInput('inv-qty');
+      body.purchase_unit_price_rial = numFromInput('inv-purchase-price') || undefined;
+      const symbol = document.getElementById('inv-asset').value;
+      if (symbol && symbol !== item.symbol) body.symbol = symbol;
+    } else {
+      body.invested_amount_rial = numFromInput('inv-invested');
     }
     await api(`/investments/${item.id}`, { method: 'PUT', body: JSON.stringify(body) });
     manualModal.hidden = true;

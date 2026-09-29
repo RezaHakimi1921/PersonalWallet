@@ -8,6 +8,8 @@ const { OAuth2Client } = require('google-auth-library');
 
 const { parseSms } = require('./parsers');
 const { sendNtfy } = require('./ntfy');
+const { ASSET_CATALOG, CATALOG_BY_SYMBOL, LEGACY_TYPE_TO_SYMBOL, getMarketPrices, unitPriceRial } = require('./assets');
+const { DEFAULT_CATEGORIES } = require('./defaults');
 
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || '';
 const AUTH_SECRET = process.env.AUTH_SECRET || 'dev-secret-change-me';
@@ -122,6 +124,30 @@ async function migrateAuth() {
   // that would now wrongly block two different users from both having e.g. "غذا".
   await pool.query(`ALTER TABLE categories DROP CONSTRAINT IF EXISTS categories_name_direction_key`);
   await backfillDefaultUser();
+
+  // Accounts that signed up before default categories existed got an empty list.
+  const emptyUsers = await pool.query(
+    `SELECT u.id FROM users u WHERE NOT EXISTS (SELECT 1 FROM categories c WHERE c.user_id = u.id)`
+  );
+  for (const u of emptyUsers.rows) await seedDefaultCategories(pool, u.id);
+
+  // Per-asset market symbol (half coin, euro, ...) instead of one price per coarse asset_type.
+  await pool.query(`ALTER TABLE investments ADD COLUMN IF NOT EXISTS symbol TEXT`);
+  for (const [type, symbol] of Object.entries(LEGACY_TYPE_TO_SYMBOL)) {
+    await pool.query(
+      `UPDATE investments SET symbol = $1 WHERE symbol IS NULL AND asset_type = $2 AND quantity IS NOT NULL`,
+      [symbol, type]
+    );
+  }
+}
+
+// Only seeds a user with no categories yet, so it never duplicates or overrides a user's own list.
+async function seedDefaultCategories(db, userId) {
+  const existing = await db.query('SELECT 1 FROM categories WHERE user_id = $1 LIMIT 1', [userId]);
+  if (existing.rows.length > 0) return;
+  for (const c of DEFAULT_CATEGORIES) {
+    await db.query('INSERT INTO categories (name, direction, user_id) VALUES ($1, $2, $3)', [c.name, c.direction, userId]);
+  }
 }
 
 // Assigns any pre-auth (NULL user_id) rows to the first registered user, but only
@@ -298,6 +324,7 @@ app.post('/auth/google', async (req, res) => {
         [googleId, email, api_key]
       );
       await backfillDefaultUser();
+      await seedDefaultCategories(pool, result.rows[0].id);
     }
     const user = result.rows[0];
     res.cookie('session', signToken(user.id), COOKIE_OPTS);
@@ -357,6 +384,7 @@ app.post('/auth/register', async (req, res) => {
     );
     const user = result.rows[0];
     await backfillDefaultUser();
+    await seedDefaultCategories(pool, user.id);
     res.cookie('session', signToken(user.id), COOKIE_OPTS);
     res.json({ ok: true, phone: user.phone });
   } catch (err) {
@@ -366,14 +394,18 @@ app.post('/auth/register', async (req, res) => {
   }
 });
 
+// Accepts a phone number or, for accounts that have one (e.g. the demo account), a username.
 app.post('/auth/login', async (req, res) => {
-  const phone = normalizeIranianPhone(req.body?.phone);
   const { password } = req.body || {};
-  if (!phone || !password) return res.status(400).json({ error: 'شماره موبایل و رمز عبور لازمه' });
-  const result = await pool.query('SELECT * FROM users WHERE phone = $1', [phone]);
+  const identifier = String(req.body?.phone || '').trim();
+  if (!identifier || !password) return res.status(400).json({ error: 'شماره موبایل (یا نام کاربری) و رمز عبور لازمه' });
+  const phone = normalizeIranianPhone(identifier);
+  const result = phone
+    ? await pool.query('SELECT * FROM users WHERE phone = $1', [phone])
+    : await pool.query('SELECT * FROM users WHERE lower(username) = lower($1)', [identifier]);
   const user = result.rows[0];
-  if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-    return res.status(401).json({ error: 'شماره موبایل یا رمز اشتباهه' });
+  if (!user || !user.password_hash || !(await bcrypt.compare(password, user.password_hash))) {
+    return res.status(401).json({ error: 'نام کاربری یا رمز اشتباهه' });
   }
   res.cookie('session', signToken(user.id), COOKIE_OPTS);
   res.json({ ok: true, phone: user.phone });
@@ -975,25 +1007,55 @@ app.get('/investments', requireAuth, async (req, res) => {
   res.json(result.rows);
 });
 
+async function livePriceRial(symbol) {
+  try {
+    return unitPriceRial(await getMarketPrices(), symbol);
+  } catch (err) {
+    console.error('market price fetch error', err);
+    return null;
+  }
+}
+
+// The trackable assets with their current unit price (null when the feed is unreachable).
+app.get('/investments/assets', requireAuth, async (req, res) => {
+  let prices = null;
+  try { prices = await getMarketPrices(); } catch (err) { console.error('market price fetch error', err); }
+  res.json(ASSET_CATALOG.map((a) => ({ ...a, unit_price_rial: unitPriceRial(prices, a.symbol) })));
+});
+
 app.post('/investments', requireAuth, async (req, res) => {
   const {
-    title, asset_type, quantity, purchase_unit_price_rial,
-    invested_amount_rial, current_value_rial, note,
+    title, symbol, quantity, invested_amount_rial, current_value_rial, note,
   } = req.body || {};
-  if (!title) return res.status(400).json({ error: 'title is required' });
+  let { asset_type, purchase_unit_price_rial } = req.body || {};
+  const asset = symbol ? CATALOG_BY_SYMBOL[symbol] : null;
+  if (symbol && !asset) return res.status(400).json({ error: 'unknown asset symbol' });
+  if (!title && !asset) return res.status(400).json({ error: 'title is required' });
 
-  // If quantity + unit price are given (gold/coin/dollar), derive the totals from them.
+  let currentUnitPrice = null;
+  if (asset) {
+    asset_type = asset.asset_type;
+    currentUnitPrice = await livePriceRial(symbol);
+    if (purchase_unit_price_rial == null) purchase_unit_price_rial = currentUnitPrice;
+    if (currentUnitPrice == null) currentUnitPrice = purchase_unit_price_rial;
+  }
+
+  // If quantity + unit price are given, derive the totals from them.
   const computedInvested = (quantity != null && purchase_unit_price_rial != null)
     ? Math.round(Number(quantity) * Number(purchase_unit_price_rial))
     : invested_amount_rial;
   if (!computedInvested) return res.status(400).json({ error: 'invested_amount_rial or quantity+purchase_unit_price_rial required' });
+  const computedCurrent = (quantity != null && currentUnitPrice != null)
+    ? Math.round(Number(quantity) * Number(currentUnitPrice))
+    : (current_value_rial ?? computedInvested);
 
   const result = await pool.query(
-    `INSERT INTO investments (title, asset_type, quantity, purchase_unit_price_rial, current_unit_price_rial, invested_amount_rial, current_value_rial, note, user_id)
-     VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8) RETURNING *`,
+    `INSERT INTO investments (title, asset_type, symbol, quantity, purchase_unit_price_rial, current_unit_price_rial, invested_amount_rial, current_value_rial, note, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
     [
-      title, asset_type || 'other', quantity ?? null, purchase_unit_price_rial ?? null,
-      computedInvested, current_value_rial ?? computedInvested, note || null, req.userId,
+      title || asset.name, asset_type || 'other', asset ? symbol : null, quantity ?? null,
+      purchase_unit_price_rial ?? null, currentUnitPrice ?? purchase_unit_price_rial ?? null,
+      computedInvested, computedCurrent, note || null, req.userId,
     ]
   );
   res.json(result.rows[0]);
@@ -1001,15 +1063,14 @@ app.post('/investments', requireAuth, async (req, res) => {
 
 app.put('/investments/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
-  const { title, quantity, purchase_unit_price_rial, invested_amount_rial, current_value_rial, current_unit_price_rial, note } = req.body || {};
+  const { title, symbol, quantity, purchase_unit_price_rial, invested_amount_rial, current_value_rial, note } = req.body || {};
+  let { current_unit_price_rial } = req.body || {};
+  const asset = symbol ? CATALOG_BY_SYMBOL[symbol] : null;
+  if (symbol && !asset) return res.status(400).json({ error: 'unknown asset symbol' });
+  if (asset && current_unit_price_rial == null) current_unit_price_rial = await livePriceRial(symbol);
+
   const client = await pool.connect();
   try {
-    let resolvedCurrentValue = current_value_rial;
-    if (current_unit_price_rial != null && quantity == null) {
-      const invRes = await client.query('SELECT quantity FROM investments WHERE id = $1 AND user_id = $2', [id, req.userId]);
-      const existingQuantity = invRes.rows[0]?.quantity;
-      if (existingQuantity != null) resolvedCurrentValue = Math.round(Number(existingQuantity) * Number(current_unit_price_rial));
-    }
     const result = await client.query(
       `UPDATE investments SET
          title = COALESCE($1, title),
@@ -1019,12 +1080,33 @@ app.put('/investments/:id', requireAuth, async (req, res) => {
          current_value_rial = COALESCE($5, current_value_rial),
          current_unit_price_rial = COALESCE($6, current_unit_price_rial),
          note = COALESCE($7, note),
+         symbol = COALESCE($8, symbol),
+         asset_type = COALESCE($9, asset_type),
          updated_at = now()
-       WHERE id = $8 AND user_id = $9 RETURNING *`,
-      [title ?? null, quantity ?? null, purchase_unit_price_rial ?? null, invested_amount_rial ?? null, resolvedCurrentValue ?? null, current_unit_price_rial ?? null, note ?? null, id, req.userId]
+       WHERE id = $10 AND user_id = $11 RETURNING *`,
+      [
+        title ?? null, quantity ?? null, purchase_unit_price_rial ?? null, invested_amount_rial ?? null,
+        current_value_rial ?? null, current_unit_price_rial ?? null, note ?? null,
+        asset ? symbol : null, asset ? asset.asset_type : null, id, req.userId,
+      ]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'not found' });
-    res.json(result.rows[0]);
+    let row = result.rows[0];
+
+    // For quantity-based assets the totals follow quantity × unit price, unless given explicitly.
+    if (row.quantity != null) {
+      const q = Number(row.quantity);
+      const invested = invested_amount_rial == null && row.purchase_unit_price_rial != null
+        ? Math.round(q * Number(row.purchase_unit_price_rial)) : Number(row.invested_amount_rial);
+      const current = current_value_rial == null && row.current_unit_price_rial != null
+        ? Math.round(q * Number(row.current_unit_price_rial)) : Number(row.current_value_rial);
+      const recomputed = await client.query(
+        'UPDATE investments SET invested_amount_rial = $1, current_value_rial = $2 WHERE id = $3 RETURNING *',
+        [invested, current, row.id]
+      );
+      row = recomputed.rows[0];
+    }
+    res.json(row);
   } finally {
     client.release();
   }
@@ -1484,36 +1566,18 @@ cron.schedule('0 8 * * 6', async () => {
 
 // ---------- Auto-update gold/dollar/coin investment prices from BrsApi (free market rates) ----------
 // Requires BRSAPI_KEY in .env; get a free key at https://brsapi.ir/tsetmc-exchange-free-bourse-api-key-request/
-const ASSET_TYPE_TO_BRSAPI_SYMBOL = {
-  dollar: 'USD',
-  gold: 'IR_GOLD_18K',
-  coin: 'IR_COIN_EMAMI',
-};
-
-async function updateInvestmentPrices() {
+async function updateInvestmentPrices({ force = false } = {}) {
   if (!process.env.BRSAPI_KEY) return;
   try {
-    // BrsApi's firewall blocks default runtime User-Agents (Node/Python/Go) and can
-    // temporarily ban the IP; a real browser User-Agent is required.
-    const res = await fetch(`https://Api.BrsApi.ir/Market/Gold_Currency.php?key=${process.env.BRSAPI_KEY}`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-      },
-    });
-    const data = await res.json();
-    const allItems = [...(data.gold || []), ...(data.currency || [])];
-    const priceBySymbol = {};
-    allItems.forEach((item) => { priceBySymbol[item.symbol] = item.price; });
+    const prices = await getMarketPrices({ force });
 
     // Applies to every user's investments alike -- market prices aren't per-user.
     const investmentsRes = await pool.query(
-      `SELECT * FROM investments WHERE asset_type IN ('dollar','gold','coin') AND quantity IS NOT NULL`
+      `SELECT * FROM investments WHERE symbol IS NOT NULL AND quantity IS NOT NULL`
     );
     for (const inv of investmentsRes.rows) {
-      const symbol = ASSET_TYPE_TO_BRSAPI_SYMBOL[inv.asset_type];
-      const tomanPrice = priceBySymbol[symbol];
-      if (!tomanPrice) continue;
-      const currentUnitPriceRial = Math.round(Number(tomanPrice) * 10);
+      const currentUnitPriceRial = unitPriceRial(prices, inv.symbol);
+      if (!currentUnitPriceRial) continue;
       const currentValueRial = Math.round(Number(inv.quantity) * currentUnitPriceRial);
       await pool.query(
         `UPDATE investments SET current_unit_price_rial = $1, current_value_rial = $2, updated_at = now() WHERE id = $3`,
@@ -1526,7 +1590,7 @@ async function updateInvestmentPrices() {
 }
 
 // Every hour from 8am to 11pm (no point polling overnight when nobody's looking)
-cron.schedule('0 8-23 * * *', updateInvestmentPrices);
+cron.schedule('0 8-23 * * *', () => updateInvestmentPrices({ force: true }));
 
 app.post('/investments/refresh-prices', requireAuth, async (req, res) => {
   if (!process.env.BRSAPI_KEY) return res.status(400).json({ error: 'BRSAPI_KEY not configured' });
