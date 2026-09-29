@@ -6,7 +6,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
 
-const { parseSms } = require('./parsers');
+const { parseSms, looksLikeOneTimePassword } = require('./parsers');
 const { sendNtfy } = require('./ntfy');
 const { ASSET_CATALOG, CATALOG_BY_SYMBOL, LEGACY_TYPE_TO_SYMBOL, getMarketPrices, unitPriceRial } = require('./assets');
 const { DEFAULT_CATEGORIES } = require('./defaults');
@@ -466,11 +466,6 @@ async function checkLowBalance(accountId) {
 // the original one where the body names the account in a `bank` field.
 app.post('/webhook/sms/:apiKey/:accountCode', (req, res) => handleSmsWebhook(req, res, req.params.accountCode));
 app.post('/webhook/sms/:apiKey', (req, res) => handleSmsWebhook(req, res, null));
-
-const ONE_TIME_PASSWORD = /رمز\s*(پویا|یکبار|دوم|اینترنتی)|کد\s*(تایید|تأیید|یکبار|فعال‌?سازی|امنیتی)|رمز\s*عبور|\bOTP\b|password|verification/i;
-function looksLikeOneTimePassword(text) {
-  return ONE_TIME_PASSWORD.test(text);
-}
 
 async function handleSmsWebhook(req, res, accountCodeFromPath) {
   const user = await resolveUserByApiKey(req.params.apiKey);

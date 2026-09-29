@@ -1,79 +1,107 @@
-function toEnglishDigits(str) {
-  return str
+// Bank SMS -> { amount_rial, direction, balance_after_rial }, or null when the text
+// isn't a money movement we can read with confidence. Real bank SMS mix Arabic and
+// Persian letters (ي/ی, ك/ک), Persian and Latin digits, and invisible bidi marks
+// around numbers, so everything is normalized before any pattern runs.
+
+const BIDI_MARKS = /[‎‏‪-‮⁦-⁩﻿]/g;
+
+function normalize(text) {
+  return String(text)
+    .replace(BIDI_MARKS, '')
+    .replace(/ي/g, 'ی')
+    .replace(/ك/g, 'ک')
     .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
-    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    .replace(/٬/g, ',');
 }
 
 function toNumber(str) {
-  return parseInt(toEnglishDigits(str).replace(/[,٬]/g, ''), 10);
+  return parseInt(str.replace(/,/g, ''), 10);
 }
 
-// رسالت و پاسارگاد: همون فرمت مشترک
-function parseSignedFormat(text) {
-  const signMatch = text.match(/([+-])\s*([\d,]+)/);
-  const balanceMatch = text.match(/مانده:\s*([\d,]+)/);
-  if (!signMatch) return null;
+// Money is comma-grouped in bank SMS; a bare run of 4+ digits is accepted only where
+// a label says it's an amount (e.g. «برداشت500000»), never on its own -- bare digits
+// are card, account and tracking numbers.
+const GROUPED = String.raw`\d{1,3}(?:,\d{3})+`;
+const LABELLED = String.raw`\d{1,3}(?:,\d{3})+|\d{4,}`;
 
-  const amount = toNumber(signMatch[2]);
-  const direction = signMatch[1] === '+' ? 'income' : 'expense';
-  const balance = balanceMatch ? toNumber(balanceMatch[1]) : null;
+const EXPENSE_WORDS = String.raw`برداشت|خرید|کسر|پرداخت|پرید|بدهکار|انتقال(?!\s*به\s*(?:حساب|کارت)\s*شما)`;
+const INCOME_WORDS = String.raw`واریز|نشست|بستانکار|افزایش\s*موجودی|انتقال\s*به\s*(?:حساب|کارت)\s*شما|سود`;
 
-  return { amount_rial: amount, direction, balance_after_rial: balance };
+function findBalance(text) {
+  const m = text.match(new RegExp(`(?:مانده|موجودی)(?:\\s*حساب)?\\s*[:：]?\\s*(${LABELLED})`));
+  return m ? { value: toNumber(m[1]), matched: m[0] } : null;
 }
 
-function parseBlu(text) {
-  const amountMatch = text.match(/([\d,]+)\s*ریال/);
-  const balanceMatch = text.match(/موجودی:\s*([\d,]+)/);
-  if (!amountMatch) return null;
+function findDirectionByWords(text) {
+  const expenseAt = text.search(new RegExp(EXPENSE_WORDS));
+  const incomeAt = text.search(new RegExp(INCOME_WORDS));
+  if (expenseAt < 0 && incomeAt < 0) return null;
+  if (incomeAt < 0) return 'expense';
+  if (expenseAt < 0) return 'income';
+  return expenseAt < incomeAt ? 'expense' : 'income';
+}
 
-  const amount = toNumber(amountMatch[1]);
-  const balance = balanceMatch ? toNumber(balanceMatch[1]) : null;
+function tomanAware(amount, after) {
+  return /^\s*تومان/.test(after) ? amount * 10 : amount;
+}
 
-  let direction = null;
-  if (text.includes('پرید')) direction = 'expense';
-  else if (text.includes('نشست')) direction = 'income';
+function findAmount(text) {
+  // 1. A signed amount («-50,000», «:+8,000,000») carries its own direction.
+  const signed = text.match(new RegExp(`(?:^|[\\s:])([+-])\\s*(${GROUPED}|\\d{4,})(?![\\d,])`, 'm'));
+  if (signed) return { value: toNumber(signed[2]), direction: signed[1] === '+' ? 'income' : 'expense' };
+
+  // 2. «مبلغ: 1,000,000»
+  const labelled = text.match(new RegExp(`مبلغ\\s*[:：]?\\s*(${LABELLED})`));
+  if (labelled) return { value: tomanAware(toNumber(labelled[1]), text.slice(labelled.index + labelled[0].length)) };
+
+  // 3. Right after a movement word on the same line: «خرید پایانه فروش: 900,000», «برداشت500,000».
+  const keyword = text.match(new RegExp(`(?:${EXPENSE_WORDS}|${INCOME_WORDS})[^\\n\\d]{0,25}?(${LABELLED})(?![\\d/])`));
+  if (keyword) return { value: tomanAware(toNumber(keyword[1]), text.slice(keyword.index + keyword[0].length)) };
+
+  // 4. A grouped number with its currency: «4,218,500 ریال».
+  const currency = text.match(new RegExp(`(${GROUPED})\\s*(ریال|تومان)`));
+  if (currency) return { value: currency[2] === 'تومان' ? toNumber(currency[1]) * 10 : toNumber(currency[1]) };
+
+  // 5. Any other grouped number.
+  const grouped = text.match(new RegExp(`(?<![\\d/,])(${GROUPED})(?![\\d/,])`));
+  if (grouped) return { value: toNumber(grouped[1]) };
+  return null;
+}
+
+function parseGeneric(text) {
+  const balance = findBalance(text);
+  const withoutBalance = balance ? text.replace(balance.matched, ' ') : text;
+  const amount = findAmount(withoutBalance);
+  if (!amount || !(amount.value > 0)) return null;
+  const direction = amount.direction || findDirectionByWords(withoutBalance);
   if (!direction) return null;
-
-  return { amount_rial: amount, direction, balance_after_rial: balance };
+  return { amount_rial: amount.value, direction, balance_after_rial: balance ? balance.value : null };
 }
 
-// Best-effort parser for banks we have no verified sample for. Amounts in bank SMS
-// are comma-grouped, which keeps dates, times and masked card numbers from matching.
-const AMOUNT = String.raw`\d{1,3}(?:,\d{3})+|\d{4,}`;
-const EXPENSE_WORDS = /برداشت|خرید|کسر|پرداخت|انتقال\s*از|بدهکار/;
-const INCOME_WORDS = /واریز|افزایش|بستانکار|انتقال\s*به\s*حساب\s*شما|سود/;
+// Resalat and Pasargad: account line, a signed amount on its own line, «مانده:».
+function parseSignedFormat(text) {
+  const signMatch = text.match(new RegExp(`(?:^|[\\s:])([+-])\\s*(${GROUPED}|\\d{4,})`, 'm'));
+  if (!signMatch) return null;
+  const balance = findBalance(text);
+  return {
+    amount_rial: toNumber(signMatch[2]),
+    direction: signMatch[1] === '+' ? 'income' : 'expense',
+    balance_after_rial: balance ? balance.value : null,
+  };
+}
 
-function parseGeneric(rawText) {
-  const text = toEnglishDigits(rawText).replace(/٬/g, ',');
-  const balanceMatch = text.match(new RegExp(`(?:مانده|موجودی)\\s*[:：]?\\s*(${AMOUNT})`));
-  const balance = balanceMatch ? toNumber(balanceMatch[1]) : null;
-  const withoutBalance = balanceMatch ? text.replace(balanceMatch[0], ' ') : text;
-
-  let amount = null;
+// Blu: «X ریال از حساب شما پرید» / «X ریال به حساب شما نشست».
+function parseBlu(text) {
+  const balance = findBalance(text);
+  const withoutBalance = balance ? text.replace(balance.matched, ' ') : text;
+  const amountMatch = withoutBalance.match(new RegExp(`(${GROUPED})\\s*ریال`));
+  if (!amountMatch) return null;
   let direction = null;
-  const signed = withoutBalance.match(new RegExp(`(^|[\\s:])([+-])\\s*(${AMOUNT})`, 'm'));
-  if (signed) {
-    amount = toNumber(signed[3]);
-    direction = signed[2] === '+' ? 'income' : 'expense';
-  } else {
-    const candidates = [
-      new RegExp(`مبلغ\\s*[:：]?\\s*(${AMOUNT})`),
-      new RegExp(`(${AMOUNT})\\s*ریال`),
-      /(?<![\d/])(\d{1,3}(?:,\d{3})+)(?![\d/])/,
-      /(?<![\d/.])(\d{4,})(?![\d/.])/,
-    ];
-    for (const re of candidates) {
-      const m = withoutBalance.match(re);
-      if (m) { amount = toNumber(m[1]); break; }
-    }
-    const expenseAt = withoutBalance.search(EXPENSE_WORDS);
-    const incomeAt = withoutBalance.search(INCOME_WORDS);
-    if (expenseAt >= 0 && (incomeAt < 0 || expenseAt < incomeAt)) direction = 'expense';
-    else if (incomeAt >= 0) direction = 'income';
-  }
-
-  if (!amount || amount <= 0 || !direction) return null;
-  return { amount_rial: amount, direction, balance_after_rial: balance };
+  if (withoutBalance.includes('پرید')) direction = 'expense';
+  else if (withoutBalance.includes('نشست')) direction = 'income';
+  if (!direction) return null;
+  return { amount_rial: toNumber(amountMatch[1]), direction, balance_after_rial: balance ? balance.value : null };
 }
 
 const PARSERS = {
@@ -82,9 +110,17 @@ const PARSERS = {
   blu: parseBlu,
 };
 
-function parseSms(bankCode, text) {
-  const parser = PARSERS[bankCode] || parseGeneric;
-  return parser(text);
+// A bank-specific parser gets first try; if it can't read the message, the generic one does.
+function parseSms(bankCode, rawText) {
+  const text = normalize(rawText);
+  const specific = PARSERS[bankCode];
+  return (specific && specific(text)) || parseGeneric(text);
 }
 
-module.exports = { parseSms };
+// Banks send one-time/dynamic passwords from the same sender as transaction SMS.
+const ONE_TIME_PASSWORD = /رمز\s*(پویا|یکبار|دوم|اینترنتی)|کد\s*(تایید|تأیید|یکبار|فعال‌?سازی|امنیتی)|رمز\s*عبور|\bOTP\b|password|verification/i;
+function looksLikeOneTimePassword(rawText) {
+  return ONE_TIME_PASSWORD.test(normalize(rawText));
+}
+
+module.exports = { parseSms, normalize, looksLikeOneTimePassword };

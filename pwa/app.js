@@ -923,7 +923,7 @@ async function renderOverview() {
       <div class="card" style="border-color:rgba(245,158,11,.4);background:rgba(120,53,15,.25)">
         <div class="row">
           <div>
-            <strong style="color:#fbbf24">⏰ ${pending.length} تراکنش در انتظار تایید</strong>
+            <strong style="color:var(--amber)">⏰ ${pending.length} تراکنش در انتظار تایید</strong>
             <div class="muted">پیامک‌های بانکی جدید نیاز به دسته‌بندی دارند.</div>
           </div>
           <button class="action" id="goto-pending" style="width:auto;margin:0">مشاهده</button>
@@ -1480,7 +1480,7 @@ function txCard(t, cats, editable, accounts) {
         <input id="note-${t.id}" placeholder="توضیح (اختیاری)" />
         <input id="tags-${t.id}" placeholder="تگ (مثلا سفر، کار — با کاما جدا کن)" />
         <div class="row" style="gap:8px">
-          <button class="action" id="confirm-${t.id}" style="flex:1">ثبت و قطعی</button>
+          <button class="action confirm" id="confirm-${t.id}" style="flex:1">✓ ثبت نهایی</button>
           <button class="action danger" id="delete-${t.id}" style="width:auto;flex:0 0 auto">🗑</button>
         </div>
       ` : ''}
@@ -1864,7 +1864,7 @@ function openSmsSetupModal(account, { justCreated = false } = {}) {
   const copyBox = (id, value) => `
     <div class="copy-box">
       <code id="${id}" dir="ltr">${value}</code>
-      <button class="secondary copy-btn" data-copy="${id}">کپی</button>
+      <button class="secondary copy-btn" data-copy-target="${id}">کپی</button>
     </div>`;
   manualModal.innerHTML = `
     <div class="card sms-setup">
@@ -1927,9 +1927,9 @@ function openSmsSetupModal(account, { justCreated = false } = {}) {
   document.querySelectorAll('[data-platform]').forEach((b) => b.addEventListener('click', () => showPlatform(b.dataset.platform)));
   showPlatform(detectPhonePlatform());
 
-  document.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
+  document.querySelectorAll('[data-copy-target]').forEach((b) => b.addEventListener('click', async () => {
     try {
-      await navigator.clipboard.writeText(document.getElementById(b.dataset.copy).textContent);
+      await navigator.clipboard.writeText(document.getElementById(b.dataset.copyTarget).textContent);
       b.textContent = 'کپی شد ✓';
     } catch (e) {
       b.textContent = 'دستی کپی کن';
@@ -2518,16 +2518,28 @@ async function renderAnalytics() {
   const maxDaily = Math.max(...Object.values(dailySums), 1);
   const firstOfMonthG = Jalali.toGregorian(selY, selM, 1);
   const firstWeekday = (new Date(firstOfMonthG.gy, firstOfMonthG.gm - 1, firstOfMonthG.gd).getDay() + 1) % 7; // align to Saturday-start week
+  const heatLevel = (amount) => (amount === 0 ? 0 : Math.min(4, 1 + Math.floor((amount / maxDaily) * 3.999)));
+  const daysWithSpend = Object.keys(dailySums).length;
 
   let calendarCells = '';
   for (let i = 0; i < firstWeekday; i++) calendarCells += '<div></div>';
   for (let day = 1; day <= daysInMonth; day++) {
     const amount = dailySums[day] || 0;
-    const intensity = amount / maxDaily;
-    const bg = amount === 0 ? 'var(--surface-2)' : `rgba(248,113,113,${0.15 + intensity * 0.7})`;
     const isToday = isCurrentMonth && day === nowJalali.jd;
-    calendarCells += `<div class="cal-cell" style="background:${bg};${isToday ? 'border-color:var(--gold);border-width:2px' : ''}" title="${amount ? toman(amount) + ' ریال' : ''}">${day}</div>`;
+    const isFuture = isCurrentMonth && day > nowJalali.jd;
+    calendarCells += `<button class="cal-cell heat-${heatLevel(amount)}${isToday ? ' today' : ''}${isFuture ? ' future' : ''}" data-day="${day}" ${isFuture ? 'disabled' : ''} aria-label="${day} ${JALALI_MONTH_NAMES[selM - 1]}${amount ? `: ${toman(amount)} ریال` : ''}">${day}</button>`;
   }
+
+  // Every month from the first transaction up to now, for the heatmap's month picker.
+  const firstTx = confirmed.reduce((min, t) => Math.min(min, new Date(t.created_at).getTime()), Date.now());
+  const firstTxDate = new Date(firstTx);
+  const firstJ = Jalali.toJalaali(firstTxDate.getFullYear(), firstTxDate.getMonth() + 1, firstTxDate.getDate());
+  const heatmapMonths = [];
+  for (let m = { jy: nowJalali.jy, jm: nowJalali.jm }; heatmapMonths.length < 36; m = shiftJalaliMonth(m.jy, m.jm, -1)) {
+    heatmapMonths.push(m);
+    if (m.jy < firstJ.jy || (m.jy === firstJ.jy && m.jm <= firstJ.jm)) break;
+  }
+  if (!heatmapMonths.some((m) => m.jy === selY && m.jm === selM)) heatmapMonths.push({ jy: selY, jm: selM });
 
   // Comparison: last 6 Jalali months, expense vs income vs net
   const last6 = [];
@@ -2733,7 +2745,7 @@ async function renderAnalytics() {
         ${unusualExpenses.map((t) => `
           <div class="row" style="margin-top:8px;font-size:.75rem">
             <span>${t.category_name} · <span class="muted">${formatJalaliDateTime(new Date(t.created_at))}</span></span>
-            <span class="font-num" style="color:#fbbf24">${toman(t.amount_rial)} ریال</span>
+            <span class="font-num" style="color:var(--amber)">${toman(t.amount_rial)} ریال</span>
           </div>
         `).join('')}
       </div>
@@ -2802,15 +2814,63 @@ async function renderAnalytics() {
       `).join('')}
     </div>
 
-    <div class="card">
-      <strong>تقویم هزینه (${JALALI_MONTH_NAMES[selM - 1]} ${selY})</strong>
-      <div class="muted" style="font-size:.7rem;margin-top:4px">هرچه رنگ پررنگ‌تر، هزینه‌ی اون روز بیشتره</div>
+    <div class="card" id="an-heatmap">
+      <strong>تقویم هزینه</strong>
+      <div class="heat-nav">
+        <button class="secondary" id="heat-prev" ${heatmapMonths.at(-1).jy === selY && heatmapMonths.at(-1).jm === selM ? 'disabled' : ''}>› ماه قبل</button>
+        <select id="heat-month" aria-label="انتخاب ماه">
+          ${heatmapMonths.map((m) => `<option value="${m.jy}-${m.jm}" ${m.jy === selY && m.jm === selM ? 'selected' : ''}>${JALALI_MONTH_NAMES[m.jm - 1]} ${m.jy}</option>`).join('')}
+        </select>
+        <button class="secondary" id="heat-next" ${isCurrentMonth ? 'disabled' : ''}>ماه بعد ‹</button>
+      </div>
+      <div class="row muted" style="font-size:.75rem;margin-top:10px">
+        <span>جمع هزینه‌ی ماه: <strong class="font-num privacy-target" style="color:var(--text)">${toman(thisSum)}</strong> ریال</span>
+        <span>${daysWithSpend} روز با هزینه</span>
+      </div>
       <div class="cal-grid">
         ${weekdayNames.map((n) => `<div class="muted" style="text-align:center;font-size:.6rem">${n[0]}</div>`).join('')}
         ${calendarCells}
       </div>
+      <div class="heat-legend">
+        <span>کم</span>
+        ${[0, 1, 2, 3, 4].map((l) => `<i class="heat-${l}"></i>`).join('')}
+        <span>زیاد</span>
+      </div>
+      <div id="heat-day-detail" class="muted" style="font-size:.75rem;margin-top:10px">روی یه روز بزن تا هزینه‌هاش رو ببینی.</div>
     </div>
   `;
+
+  // Month changes from the heatmap keep the heatmap in view instead of jumping to the top.
+  const showHeatmapMonth = async (m) => {
+    analyticsMonth = m;
+    await renderAnalytics();
+    document.getElementById('an-heatmap')?.scrollIntoView({ block: 'start' });
+  };
+  document.getElementById('heat-prev').addEventListener('click', () => showHeatmapMonth(shiftJalaliMonth(selY, selM, -1)));
+  document.getElementById('heat-next').addEventListener('click', () => { if (!isCurrentMonth) showHeatmapMonth(shiftJalaliMonth(selY, selM, 1)); });
+  document.getElementById('heat-month').addEventListener('change', (e) => {
+    const [jy, jm] = e.target.value.split('-').map(Number);
+    showHeatmapMonth({ jy, jm });
+  });
+  document.querySelectorAll('.cal-cell[data-day]').forEach((cell) => {
+    cell.addEventListener('click', () => {
+      document.querySelectorAll('.cal-cell.selected').forEach((c) => c.classList.remove('selected'));
+      cell.classList.add('selected');
+      const day = Number(cell.dataset.day);
+      const dayTxs = thisMonthExpense
+        .filter((t) => { const d = new Date(t.created_at); return Jalali.toJalaali(d.getFullYear(), d.getMonth() + 1, d.getDate()).jd === day; })
+        .sort((a, b) => Number(b.amount_rial) - Number(a.amount_rial));
+      const detail = document.getElementById('heat-day-detail');
+      detail.innerHTML = dayTxs.length === 0
+        ? `${day} ${JALALI_MONTH_NAMES[selM - 1]}: هزینه‌ای ثبت نشده.`
+        : `<strong style="color:var(--text)">${day} ${JALALI_MONTH_NAMES[selM - 1]} — <span class="font-num privacy-target">${toman(dailySums[day])}</span> ریال</strong>` +
+          dayTxs.map((t) => `
+            <div class="row" style="margin-top:6px">
+              <span>${t.category_name || 'بدون دسته'}${t.note ? ` · ${t.note}` : ''}</span>
+              <span class="font-num privacy-target" style="color:var(--red)">${toman(t.amount_rial)}</span>
+            </div>`).join('');
+    });
+  });
 
   document.getElementById('an-prev-month').addEventListener('click', () => {
     analyticsMonth = shiftJalaliMonth(selY, selM, -1);
