@@ -3,6 +3,9 @@ const NTFY_TOPIC = process.env.NTFY_TOPIC;
 
 // actions: array of ntfy action objects, e.g. { action: 'view', label, url }
 // topic: per-user override; falls back to the global NTFY_TOPIC env var when absent.
+// Best effort: a notification failing (ntfy.sh unreachable from the server, timeouts)
+// must never fail the request or job that sent it -- the data is already saved by then.
+// Resolves to true when ntfy accepted the message.
 async function sendNtfy({ title, message, actions, priority, tags, topic }) {
   const payload = {
     topic: topic || NTFY_TOPIC,
@@ -12,11 +15,19 @@ async function sendNtfy({ title, message, actions, priority, tags, topic }) {
     ...(tags ? { tags } : {}),
     ...(actions && actions.length ? { actions } : {}),
   };
-  await fetch(NTFY_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+  try {
+    const res = await fetch(NTFY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) console.warn(`ntfy rejected notification: HTTP ${res.status}`);
+    return res.ok;
+  } catch (err) {
+    console.warn(`ntfy unreachable (${err.cause?.code || err.name}): "${title}" not delivered`);
+    return false;
+  }
 }
 
 module.exports = { sendNtfy };

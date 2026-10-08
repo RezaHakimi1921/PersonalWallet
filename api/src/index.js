@@ -525,18 +525,29 @@ async function handleSmsWebhook(req, res, accountCodeFromPath) {
   // iOS Shortcuts auto-capitalizes single-word field names (e.g. "Text"), so match keys case-insensitively.
   const body = {};
   for (const [k, v] of Object.entries(req.body || {})) body[k.toLowerCase()] = v;
-  const bank = (accountCodeFromPath || body.bank)?.toLowerCase();
-  const text = body.text || body.message;
-  if (!bank || !text) return res.status(400).json({ error: 'bank and text are required' });
+  const bank = String(accountCodeFromPath || body.bank || '').trim().toLowerCase();
+  // Shortcuts can send the message as a list or an object when the variable isn't narrowed to its text.
+  const rawText = body.text ?? body.message;
+  const text = typeof rawText === 'string' ? rawText
+    : Array.isArray(rawText) ? rawText.join('\n')
+      : rawText?.content || rawText?.text || '';
+  if (!bank || !text.trim()) return res.status(400).json({ error: 'bank and text are required' });
 
   // Banks send one-time/dynamic passwords from the same sender as transaction SMS, so a
   // forwarding rule catches them too. Drop them unseen: never stored, never pushed to ntfy.
-  if (looksLikeOneTimePassword(String(text))) return res.json({ ok: true, ignored: 'one-time password' });
+  if (looksLikeOneTimePassword(text)) return res.json({ ok: true, ignored: 'one-time password' });
 
   const client = await pool.connect();
   try {
-    const accountRes = await client.query('SELECT * FROM accounts WHERE bank_code = $1 AND user_id = $2', [bank, user.id]);
+    let accountRes = await client.query('SELECT * FROM accounts WHERE bank_code = $1 AND user_id = $2', [bank, user.id]);
+    // A bank name instead of the account's exact code (e.g. "mellat" for "mellat-0c4e71")
+    // still works when the user has exactly one account at that bank.
     if (accountRes.rows.length === 0) {
+      const byBank = await client.query('SELECT * FROM accounts WHERE bank = $1 AND user_id = $2', [bank, user.id]);
+      if (byBank.rows.length === 1) accountRes = byBank;
+    }
+    if (accountRes.rows.length === 0) {
+      console.warn(`sms webhook: user ${user.id} sent unknown account code "${bank}"`);
       return res.status(404).json({ error: `unknown bank code: ${bank}` });
     }
     const account = accountRes.rows[0];
@@ -567,14 +578,16 @@ async function handleSmsWebhook(req, res, accountCodeFromPath) {
         'INSERT INTO unparsed_sms (bank_code, raw_text, user_id) VALUES ($1, $2, $3)',
         [bank, text, user.id]
       );
-      await sendNtfy({
+      res.json({ ok: true, parsed: false });
+      // After responding: the SMS is already recorded; a slow or blocked ntfy can't fail it.
+      sendNtfy({
         title: `⚠️ پیامک ${account.display_name} پارس نشد`,
         message: text,
         priority: 4,
         tags: ['warning'],
         topic: user.ntfy_topic,
       });
-      return res.json({ ok: true, parsed: false });
+      return;
     }
 
     const { amount_rial, direction, balance_after_rial } = parsed;
@@ -651,9 +664,9 @@ async function handleSmsWebhook(req, res, accountCodeFromPath) {
     }
     actions.push({ action: 'view', label: 'دسته‌بندی', url: `${PUBLIC_BASE_URL}/#/tx/${txId}` });
 
-    await sendNtfy({ title: 'تراکنش جدید', message, actions, priority: 4, topic: user.ntfy_topic });
-
     res.json({ ok: true, parsed: true, transaction_id: txId, new_balance_rial: newBalance });
+    // After responding: the transaction is already saved; a slow or blocked ntfy can't fail it.
+    sendNtfy({ title: 'تراکنش جدید', message, actions, priority: 4, topic: user.ntfy_topic });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'internal error' });
@@ -1637,14 +1650,15 @@ cron.schedule('*/5 * * * *', async () => {
        WHERE r.deleted_at IS NULL AND r.sent = false AND r.remind_at <= now()`
     );
     for (const r of dueRes.rows) {
-      await sendNtfy({
+      const delivered = await sendNtfy({
         title: `⏰ یادآوری (${r.module})`,
         message: r.note ? `${r.title}\n${r.note}` : r.title,
         priority: 5,
         tags: ['alarm_clock'],
         topic: r.ntfy_topic,
       });
-      await pool.query('UPDATE reminders SET sent = true WHERE id = $1', [r.id]);
+      // Undelivered reminders stay unsent and are retried on the next run.
+      if (delivered) await pool.query('UPDATE reminders SET sent = true WHERE id = $1', [r.id]);
     }
   } catch (err) {
     console.error('reminders cron error', err);
